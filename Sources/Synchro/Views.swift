@@ -231,8 +231,14 @@ struct PresetDetail: View {
                 if !model.treeCollapsed {
                     SourceTree(preset: $preset)
                         .id(preset.source + "|\(preset.ignoreHidden)")
-                    Text("→ synchronisé · ✕ ignoré : cliquez sur le symbole pour changer. Un élément ignoré n'est ni copié, ni effacé de la destination.")
+                    (Text("→ synchronisé · ")
+                     + Text("→ jaune : synchronisé, sauf des éléments ignorés à l'intérieur").foregroundColor(TreeRow.partialColor)
+                     + Text(" · ✕ ignoré. Cliquez sur le symbole pour changer. Un élément ignoré n'est ni copié, ni effacé de la destination."))
                         .font(.caption).foregroundStyle(.secondary)
+                        // Deux lignes au plus, servies avant la liste. Surtout pas de fixedSize ici : la hauteur
+                        // minimale de la fenêtre se calculerait sur un texte replié à l'extrême, et tout déborderait.
+                        .lineLimit(2)
+                        .layoutPriority(1)
                 }
             }
             .disabled(locked)
@@ -967,6 +973,31 @@ struct TreeRow: View {
     private var excluded: Bool { preset.excludes.contains { Scanner.excludeKey($0) == key } }
     private var ignored: Bool { inherited || excluded }
 
+    /// Nombre d'éléments ignorés à l'intérieur de ce dossier, quand lui-même est synchronisé.
+    private var exceptions: Int {
+        guard item.isDir, !ignored else { return 0 }
+        let prefix = key + "/"
+        return preset.excludes.filter { Scanner.excludeKey($0).hasPrefix(prefix) }.count
+    }
+
+    /// Flèche bleue : tout est synchronisé. Flèche jaune : synchronisé, sauf des exceptions à l'intérieur.
+    private var tint: Color {
+        if ignored { return .secondary }
+        return exceptions > 0 ? TreeRow.partialColor : .accentColor
+    }
+
+    /// Jaune doré : le jaune pur du système se lit mal sur fond clair.
+    static let partialColor = Color(red: 0.92, green: 0.64, blue: 0.0)
+
+    private var hint: String {
+        if inherited { return "Ignoré par un dossier parent" }
+        if excluded { return "Ignoré — cliquer pour synchroniser" }
+        if exceptions > 0 {
+            return "Synchronisé, sauf \(Fmt.count(exceptions, "élément ignoré", "éléments ignorés")) à l'intérieur — cliquer pour ignorer tout le dossier"
+        }
+        return "Synchronisé — cliquer pour ignorer"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
@@ -985,17 +1016,20 @@ struct TreeRow: View {
                     .accessibilityHidden(true)
                 Text(item.name).lineLimit(1).truncationMode(.middle).strikethrough(ignored)
                 Spacer()
+                if exceptions > 0 {
+                    Text(Fmt.count(exceptions, "ignoré", "ignorés")).font(.caption).foregroundStyle(TreeRow.partialColor)
+                }
                 Button(action: toggle) {
                     Image(systemName: ignored ? "xmark" : "arrow.right")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(ignored ? Color.secondary : Color.accentColor)
+                        .fontWeight(exceptions > 0 ? .heavy : .semibold)
+                        .foregroundStyle(tint)
                         .frame(width: 22, height: 18)
                 }
                 .buttonStyle(.plain)
                 .disabled(inherited)
-                .help(inherited ? "Ignoré par un dossier parent" : (excluded ? "Ignoré — cliquer pour synchroniser" : "Synchronisé — cliquer pour ignorer"))
+                .help(hint)
                 .accessibilityLabel(item.name)
-                .accessibilityValue(ignored ? "ignoré" : "synchronisé")
+                .accessibilityValue(ignored ? "ignoré" : (exceptions > 0 ? "synchronisé, avec des éléments ignorés à l'intérieur" : "synchronisé"))
                 .accessibilityHint(inherited ? "Ignoré par un dossier parent" : "Bascule entre synchronisé et ignoré")
             }
             .opacity(ignored ? 0.5 : 1)
