@@ -8,6 +8,8 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 
 ![Aperçu présenté avant toute modification](docs/apercu.png)
 
+![Contenu de la source : flèche bleue, flèche jaune et croix](docs/elements-ignores.png)
+
 *Captures réalisées avec des données fictives.*
 
 ## Fonctions
