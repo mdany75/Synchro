@@ -12,7 +12,8 @@ enum Journal {
 
     /// Écrit le plan complet avant de commencer, pour qu'une exécution interrompue laisse quand même une trace.
     /// Une erreur d'écriture du journal ne doit jamais empêcher la synchronisation : elle renvoie simplement `nil`.
-    static func begin(task: String, source: String, destination: String, resolved: String, plan: SyncPlan) -> URL? {
+    static func begin(task: String, source: String, destination: String, resolved: String, plan: SyncPlan,
+                      acknowledged: Bool) -> URL? {
         let fm = FileManager.default
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let safeName = task.map { "/:\\".contains($0) ? "-" : $0 }.prefix(60)
@@ -30,8 +31,15 @@ enum Journal {
             "À effacer : \(Fmt.count(plan.filesToDelete, "fichier", "fichiers")) (\(Fmt.bytes(plan.bytesToDelete)))",
             "Inchangés : \(plan.unchanged.formatted())",
         ]
-        if plan.contentMismatches > 0 {
-            lines.append("Contenu différent malgré une taille et une date identiques : \(plan.contentMismatches.formatted())")
+        if plan.verified > 0 {
+            lines.append("Contenu comparé : \(plan.verified.formatted()) fichiers, dont \(plan.contentMismatches.formatted()) différents malgré une taille et une date identiques")
+        }
+        if !plan.dirs.isEmpty { lines.append("Dossiers à créer : \(plan.dirs.count.formatted())") }
+        if !plan.destinationExists { lines.append("Le dossier de destination n'existait pas : il est créé.") }
+        if !plan.risks.isEmpty {
+            lines.append("")
+            lines.append("SITUATIONS INHABITUELLES" + (acknowledged ? " (confirmées par la case à cocher)" : ""))
+            lines += plan.risks.map { "  ! \($0)" }
         }
         if !plan.keptDirs.isEmpty {
             lines.append("")

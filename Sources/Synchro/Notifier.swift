@@ -4,6 +4,8 @@ import UserNotifications
 /// Son et notification quand une analyse ou une synchronisation demande l'attention.
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
+    /// Ni son ni notification : pour les tests.
+    var muted = false
 
     // UNUserNotificationCenter exige un vrai bundle d'app (absent en mode ligne de commande).
     private var center: UNUserNotificationCenter? {
@@ -11,11 +13,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func prepare() {
+        guard !muted else { return }
         center?.delegate = self
         center?.requestAuthorization(options: [.alert]) { _, _ in }
     }
 
     func post(title: String, body: String, sound: String) {
+        guard !muted else { return }
         NSSound(named: sound)?.play()
         let content = UNMutableNotificationContent()
         content.title = title

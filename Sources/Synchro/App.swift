@@ -32,9 +32,10 @@ struct SynchroApp: App {
 }
 
 /// Mode ligne de commande, pour vérifier le moteur sans interface :
-///   Synchro --plan <source> <destination> [--exclude <chemin>]... [--run [--confirmer]]
+///   Synchro --plan <source> <destination> [--exclude <chemin>]... [--comparer-tout] [--run [--confirmer]]
 /// `--plan` seul n'écrit rien. `--run` exécute le plan aussitôt, sans aperçu à confirmer, avec les garde-fous
 /// du moteur ; `--confirmer` tient lieu de la case à cocher exigée pour une situation inhabituelle.
+/// `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés.
 /// Les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
 enum CLI {
     static func runIfRequested() {
@@ -52,12 +53,20 @@ enum CLI {
             var dst = try Mounter.resolve(dstArg)
             try RootCheck.validate(src: src, dst: dst)
             let dstExists = FileManager.default.fileExists(atPath: dst.path)
-            if dstExists { dst = dst.resolvingSymlinksInPath() }
+            if dstExists {
+                dst = dst.resolvingSymlinksInPath()
+            } else if !FileManager.default.fileExists(atPath: dst.deletingLastPathComponent().path) {
+                throw SyncError("Destination introuvable : \(dst.path). Vérifiez l'adresse, ou créez d'abord le dossier.")
+            }
             let s = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: true) { _ in }
             let d = dstExists
                 ? try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: true, flagHides: false) { _ in }
                 : ScanResult()
-            var plan = Scanner.plan(source: s, destination: d, caseInsensitive: RootCheck.isCaseInsensitive(at: dst))
+            // Sans historique, le repère est la date à laquelle chaque copie de destination a été écrite.
+            var options = PlanOptions(reference: .destinationCopy, verifyAll: args.contains("--comparer-tout"))
+            options.caseInsensitive = RootCheck.isCaseInsensitive(
+                at: dst, samples: d.entries.values.lazy.filter { !$0.isDir }.prefix(50).map(\.rel))
+            var plan = Scanner.plan(source: s, destination: d, options: options)
             plan.destinationExists = dstExists
             try Scanner.verifySuspects(&plan, src: src, dst: dst) { _, _ in }
             plan.freeSpace = RootCheck.freeSpace(at: dst)

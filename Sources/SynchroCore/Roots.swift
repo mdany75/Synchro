@@ -41,8 +41,11 @@ public enum RootCheck {
         var fs = statfs()
         guard statfs(u.path, &fs) == 0 else { return nil }
         let uuid = (try? u.resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
-        // L'UUID survit à un rebranchement ; les volumes réseau n'en ont pas, on prend alors l'adresse du partage.
-        return VolumeID(mountPoint: cString(fs.f_mntonname), identity: uuid ?? cString(fs.f_mntfromname))
+        // L'UUID survit à un rebranchement ; les volumes réseau n'en ont pas, on prend alors l'adresse du partage,
+        // ramenée à une forme qui ne dépend pas de la façon dont il a été monté.
+        let from = cString(fs.f_mntfromname)
+        let network = cString(fs.f_fstypename) == "smbfs" ? Mounter.canonicalMountSource(from) : nil
+        return VolumeID(mountPoint: cString(fs.f_mntonname), identity: uuid ?? network ?? from)
     }
 
     /// Espace libre, en octets, sur le volume qui porte (ou portera) ce dossier.
@@ -52,23 +55,38 @@ public enum RootCheck {
         return Int64(fs.f_bavail) * Int64(fs.f_bsize)
     }
 
+    /// Le même nom, majuscules et minuscules ASCII inversées. Les autres lettres ne sont pas touchées : selon les
+    /// volumes, « ß », « µ » ou « ı » n'ont pas les mêmes équivalents, et l'essai ne prouverait rien.
+    static func asciiCaseSwapped(_ name: String) -> String {
+        String(name.map { c -> Character in
+            guard c.isASCII, c.isLetter else { return c }
+            return Character(c.isUppercase ? c.lowercased() : c.uppercased())
+        })
+    }
+
     /// Le volume qui porte (ou portera) ce dossier confond-il majuscules et minuscules ?
-    /// On le constate sur un élément existant quand c'est possible ; sinon on se fie à ce que le volume déclare.
-    public static func isCaseInsensitive(at url: URL) -> Bool {
+    /// On le constate sur un élément existant quand c'est possible (`samples` : chemins relatifs connus,
+    /// par exemple issus de l'analyse) ; sinon on se fie à ce que le volume déclare.
+    public static func isCaseInsensitive(at url: URL, samples: [String] = []) -> Bool {
         let base = nearestExisting(url)
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? []
-        for name in names.prefix(50) {
-            let swapped = name == name.uppercased() ? name.lowercased() : name.uppercased()
-            guard swapped != name, !names.contains(swapped) else { continue }
+        let fm = FileManager.default
+        let roots = ((try? fm.contentsOfDirectory(atPath: base.path)) ?? []).prefix(50).map { base.appendingPathComponent($0) }
+        for candidate in roots + samples.prefix(50).map({ url.appendingPathComponent($0) }) {
+            let name = candidate.lastPathComponent
+            let swapped = asciiCaseSwapped(name)
+            guard swapped != name else { continue }
+            let folder = candidate.deletingLastPathComponent()
+            // Si l'autre orthographe existe aussi, à part entière, l'essai ne dit rien.
+            guard let siblings = try? fm.contentsOfDirectory(atPath: folder.path), !siblings.contains(swapped) else { continue }
             var a = stat(), b = stat()
-            guard lstat(base.appendingPathComponent(name).path, &a) == 0 else { continue }
-            guard lstat(base.appendingPathComponent(swapped).path, &b) == 0 else { return false }
-            return a.st_ino == b.st_ino && a.st_dev == b.st_dev
+            guard lstat(candidate.path, &a) == 0 else { continue }
+            if lstat(folder.appendingPathComponent(swapped).path, &b) == 0 { return true }
+            if errno == ENOENT { return false }
         }
         if let sensitive = (try? base.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?.volumeSupportsCaseSensitiveNames {
             return !sensitive
         }
-        // Dans le doute, on suppose le cas le plus courant, qui est aussi le plus prudent : il n'efface jamais davantage.
+        // Dans le doute, on suppose le cas le plus courant.
         return true
     }
 

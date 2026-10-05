@@ -5,12 +5,44 @@ public struct Entry: Sendable, Equatable {
     public let isDir: Bool
     public let size: Int64
     public let mtime: Date
+    /// Date du dernier changement du fichier lui-même (contenu, nom, attributs), quand le volume la fournit.
+    /// Contrairement à la date de modification, un programme ne peut pas la remettre à une valeur passée.
+    public let changed: Date?
 
-    public init(rel: String, isDir: Bool, size: Int64, mtime: Date) {
+    public init(rel: String, isDir: Bool, size: Int64, mtime: Date, changed: Date? = nil) {
         self.rel = rel
         self.isDir = isDir
         self.size = size
         self.mtime = mtime
+        self.changed = changed
+    }
+}
+
+/// Ce que l'analyse sait en plus des deux listes de fichiers.
+public struct PlanOptions: Sendable {
+    /// Repère pour juger qu'un fichier « inchangé » a été touché depuis sa sauvegarde.
+    public enum Reference: Sendable {
+        case none
+        /// Début de l'analyse de la dernière synchronisation réussie.
+        case date(Date)
+        /// À défaut d'historique : la date à laquelle la copie de destination a été écrite.
+        case destinationCopy
+    }
+
+    /// La destination ne distingue pas majuscules et minuscules (APFS par défaut, exFAT, partages SMB) :
+    /// « Photos » et « photos » y désignent le même élément.
+    public var caseInsensitive = false
+    public var reference = Reference.none
+    /// Dossiers (chemins relatifs) dont une réparation est restée inachevée : tout leur contenu est recomparé.
+    public var verifyFolders: Set<String> = []
+    /// Comparer le contenu de tous les fichiers « inchangés », à la demande.
+    public var verifyAll = false
+
+    public init(caseInsensitive: Bool = false, reference: Reference = .none, verifyFolders: Set<String> = [], verifyAll: Bool = false) {
+        self.caseInsensitive = caseInsensitive
+        self.reference = reference
+        self.verifyFolders = verifyFolders
+        self.verifyAll = verifyAll
     }
 }
 
@@ -75,6 +107,9 @@ public struct SyncPlan: Sendable {
     /// Fichiers « inchangés » en apparence dont le contenu a été comparé, et nombre de ceux qui différaient.
     public var verified = 0
     public var contentMismatches = 0
+    /// Dossiers (chemins relatifs, « » pour la racine) où une différence de contenu a été prouvée : tant que
+    /// leurs recopies n'ont pas toutes abouti, ils doivent être recomparés à l'analyse suivante.
+    public var mismatchFolders: [String] = []
     public var destinationExists = true
     public var freeSpace: Int64?
     /// Renseigné par l'appelant quand la destination n'est plus sur le volume de la dernière synchronisation.
@@ -220,6 +255,9 @@ public struct ScanResult: Sendable {
     /// Éléments écartés sans être des fichiers système (masqués par un attribut, liens, fichiers spéciaux) :
     /// ce qui porte le même nom de l'autre côté ne doit être ni effacé, ni écrasé.
     public var shielded: Set<String> = []
+    /// Sur la destination : éléments qui portent l'attribut « masqué ». Ils sont comparés normalement,
+    /// mais jamais effacés s'ils n'existent que là (fichiers de service de Windows ou du NAS).
+    public var hiddenFlagged: Set<String> = []
     public var openCatalogs: [String] = []
 
     public init() {}
@@ -232,7 +270,8 @@ public enum Scanner {
     static let systemNames: Set<String> = [
         ".DS_Store", ".Spotlight-V100", ".Trashes", ".fseventsd", ".DocumentRevisions-V100",
         ".TemporaryItems", ".VolumeIcon.icns", ".apdisk", ".com.apple.timemachine.donotpresent",
-        "@Recycle", ".@__thumb", ".streams",
+        "@Recycle", ".@__thumb", ".streams", "@eaDir", "#recycle", "lost+found",
+        "$RECYCLE.BIN", "System Volume Information", "Thumbs.db", "ehthumbs.db", "desktop.ini",
     ]
 
     /// Fichiers système et verrous temporaires : jamais copiés, et effacés avec leur dossier.
@@ -272,7 +311,8 @@ public enum Scanner {
     public static func scan(root: URL, excludes: Set<String>, ignoreHidden: Bool, flagHides: Bool = true,
                             tick: (Int) -> Void) throws -> ScanResult {
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
+                                      .attributeModificationDateKey, .isHiddenKey]
         let keySet = Set(keys)
         var out = ScanResult()
         var stack: [(url: URL, rel: String)] = [(root, "")]
@@ -312,8 +352,10 @@ public enum Scanner {
                     out.shielded.insert(k)
                     continue
                 }
+                if ignoreHidden && !dotted && v.isHidden == true { out.hiddenFlagged.insert(k) }
                 out.entries[k] = Entry(rel: rel, isDir: isDir, size: Int64(v.fileSize ?? 0),
-                                       mtime: v.contentModificationDate ?? .distantPast)
+                                       mtime: v.contentModificationDate ?? .distantPast,
+                                       changed: v.attributeModificationDate)
                 if isDir { stack.append((item, rel)) }
             }
             tick(out.entries.count)
@@ -321,9 +363,12 @@ public enum Scanner {
         return out
     }
 
-    /// - Parameter caseInsensitive: la destination ne distingue pas majuscules et minuscules (cas d'APFS par défaut,
-    ///   d'exFAT et des partages SMB) : « Photos » et « photos » y désignent le même élément.
-    public static func plan(source: ScanResult, destination: ScanResult, caseInsensitive: Bool = false) -> SyncPlan {
+    public static func plan(source: ScanResult, destination: ScanResult, caseInsensitive: Bool) -> SyncPlan {
+        plan(source: source, destination: destination, options: PlanOptions(caseInsensitive: caseInsensitive))
+    }
+
+    public static func plan(source: ScanResult, destination: ScanResult, options: PlanOptions = PlanOptions()) -> SyncPlan {
+        let caseInsensitive = options.caseInsensitive
         var p = SyncPlan()
         p.temps = destination.temps
         p.skippedLinks = source.links
@@ -344,13 +389,15 @@ public enum Scanner {
         // que par les majuscules s'écraseraient l'un l'autre : aucun des deux n'est copié, et c'est signalé.
         var src: [String: Entry] = [:]
         var clashes = Set<String>()
+        var merged = Set<String>()
         if caseInsensitive {
             src.reserveCapacity(source.entries.count)
             var clashing = Set<String>()
             for (k, e) in source.entries {
                 let c = canon(k)
                 guard let other = src[c] else { src[c] = e; continue }
-                if other.isDir && e.isDir { continue }   // deux dossiers se fondent en un seul, sans perte
+                // Deux dossiers se fondent en un seul, sans perte ; son nom sur la destination reste tel quel.
+                if other.isDir && e.isDir { merged.insert(c); continue }
                 clashes.insert(c)
                 clashing.insert(other.rel)
                 clashing.insert(e.rel)
@@ -382,6 +429,7 @@ public enum Scanner {
         let shield = Set(source.shielded.map(canon)).union(clashes)
         // Un lien ou un fichier spécial sur la destination : y écrire sortirait du dossier de sauvegarde.
         let barrier = Set(destination.shielded.map(canon))
+        let dstHidden = Set(destination.hiddenFlagged.map(canon))
 
         var active = Set<String>()   // dossiers où un fichier est copié, remplacé ou effacé
         var unchanged: [(key: String, src: Entry, dst: Entry)] = []
@@ -397,7 +445,7 @@ public enum Scanner {
             }
             let d = dst[k]
             // Seules les majuscules du nom ont changé : on renomme sur place au lieu d'effacer puis de recopier.
-            if let d, d.isDir == s.isDir, lastComponent(key(d.rel)) != lastComponent(key(s.rel)) {
+            if let d, d.isDir == s.isDir, !merged.contains(k), lastComponent(key(d.rel)) != lastComponent(key(s.rel)) {
                 p.renames.append(Rename(from: d.rel, to: s.rel))
             }
             if s.isDir {
@@ -432,6 +480,9 @@ public enum Scanner {
                 continue
             }
             if hit(k, in: shield) != nil { continue }
+            // Un élément masqué qui n'existe que sur la destination (fichier de service du NAS ou de Windows)
+            // est laissé en place avec son contenu ; s'il a son pendant dans la source, il se synchronise normalement.
+            if let hidden = hit(k, in: dstHidden), src[hidden] == nil { continue }
             gone[k] = d
             if !d.isDir {
                 p.bytesToDelete += d.size
@@ -455,12 +506,33 @@ public enum Scanner {
             return DeleteItem(rel: d.rel, isDir: d.isDir, files: totals[k]?.files ?? 0, bytes: totals[k]?.bytes ?? 0)
         }
 
-        // Même nom, même taille, même date à 2 s près ne prouve pas le même contenu : des rafales renumérotées
-        // après un tri donnent exactement cela. Dans tout dossier où un fichier vient d'être ajouté, remplacé ou
-        // retiré, on comparera donc le contenu des « inchangés » ambigus : ceux dont la date n'est pas rigoureusement
-        // identique, et ceux qui ont, d'un côté ou de l'autre, un voisin de même taille à moins de 2 s.
+        // Même nom, même taille, même date à 2 s près ne prouve pas le même contenu. Le contenu d'un « inchangé »
+        // sera donc comparé dans quatre cas :
+        //  1. le fichier source a été touché depuis sa sauvegarde (réécrit sur place, renommé, échangé) ;
+        //  2. il se trouve dans un dossier où un fichier vient d'être ajouté, remplacé ou retiré, et il est ambigu :
+        //     date pas rigoureusement identique, ou voisin de même taille à moins de 2 s d'un côté ou de l'autre
+        //     (c'est le cas des rafales renumérotées après un tri) ;
+        //  3. son dossier porte une réparation restée inachevée lors d'une synchronisation précédente ;
+        //  4. la comparaison complète a été demandée.
+        let forced = Set(options.verifyFolders.map { canon(key($0)) })
+        let grain = coarseGrain(source: src, destination: dst)
+        func sameDate(_ s: Entry, _ d: Entry) -> Bool {
+            let gap = abs(d.mtime.timeIntervalSince(s.mtime))
+            if gap < 0.001 { return true }
+            // Une destination qui arrondit les dates (exFAT, HFS+) : l'écart d'arrondi n'est pas un indice.
+            return grain > 0 && gap < grain && isOnGrain(d.mtime, grain)
+        }
+        func touched(_ s: Entry, _ d: Entry) -> Bool {
+            guard let change = s.changed else { return false }
+            switch options.reference {
+            case .none: return false
+            case .date(let since): return change > since
+            case .destinationCopy: return d.changed.map { change > $0 } ?? false
+            }
+        }
+
+        var srcTimes: [String: [Int64: [Date]]] = [:], dstTimes: [String: [Int64: [Date]]] = [:]
         if !active.isEmpty {
-            var srcTimes: [String: [Int64: [Date]]] = [:], dstTimes: [String: [Int64: [Date]]] = [:]
             for (k, s) in src where !s.isDir {
                 let folder = parentKey(k) ?? ""
                 if active.contains(folder) { srcTimes[folder, default: [:]][s.size, default: []].append(s.mtime) }
@@ -469,23 +541,41 @@ public enum Scanner {
                 let folder = parentKey(k) ?? ""
                 if active.contains(folder) { dstTimes[folder, default: [:]][d.size, default: []].append(d.mtime) }
             }
-            func hasTwin(_ dates: [Date]?, _ t: Date) -> Bool {
-                var near = 0
-                for date in dates ?? [] where abs(date.timeIntervalSince(t)) <= 2 {
-                    near += 1
-                    if near > 1 { return true }   // le fichier lui-même compte pour un
-                }
-                return false
+            for folder in srcTimes.keys { for size in srcTimes[folder]!.keys { srcTimes[folder]![size]!.sort() } }
+            for folder in dstTimes.keys { for size in dstTimes[folder]!.keys { dstTimes[folder]![size]!.sort() } }
+        }
+        /// Un autre fichier de la liste (triée) est-il à moins de 2 s ? Le fichier lui-même compte pour un.
+        func hasTwin(_ dates: [Date]?, _ t: Date) -> Bool {
+            guard let dates, dates.count > 1 else { return false }
+            var low = 0, high = dates.count
+            let from = t.addingTimeInterval(-2)
+            while low < high {
+                let mid = (low + high) / 2
+                if dates[mid] < from { low = mid + 1 } else { high = mid }
             }
-            for (k, s, d) in unchanged where s.size > 0 {
-                let folder = parentKey(k) ?? ""
-                guard active.contains(folder) else { continue }
-                p.unchangedByFolder[folder, default: []].append(s)
-                let exact = abs(d.mtime.timeIntervalSince(s.mtime)) < 0.001
-                if !exact || hasTwin(srcTimes[folder]?[s.size], s.mtime) || hasTwin(dstTimes[folder]?[d.size], d.mtime) {
-                    p.suspects.append(SyncPlan.Suspect(entry: s, folder: folder))
-                }
+            return low + 1 < dates.count && dates[low + 1].timeIntervalSince(t) <= 2
+        }
+
+        var suspectFolders = Set<String>()
+        for (k, s, d) in unchanged where s.size > 0 {
+            let folder = parentKey(k) ?? ""
+            let suspect: Bool
+            if options.verifyAll || forced.contains(folder) || touched(s, d) {
+                suspect = true
+            } else if active.contains(folder) {
+                suspect = !sameDate(s, d) || hasTwin(srcTimes[folder]?[s.size], s.mtime) || hasTwin(dstTimes[folder]?[d.size], d.mtime)
+            } else {
+                suspect = false
             }
+            if suspect {
+                p.suspects.append(SyncPlan.Suspect(entry: s, folder: folder))
+                suspectFolders.insert(folder)
+            }
+        }
+        // Pour pouvoir, dès qu'une différence est prouvée, comparer tout le reste du dossier.
+        for (k, s, _) in unchanged where s.size > 0 {
+            let folder = parentKey(k) ?? ""
+            if suspectFolders.contains(folder) { p.unchangedByFolder[folder, default: []].append(s) }
         }
 
         p.copies.sort { $0.rel.localizedStandardCompare($1.rel) == .orderedAscending }
@@ -495,6 +585,25 @@ public enum Scanner {
         p.renames.sort { ($0.from.count, $0.from) < ($1.from.count, $1.from) }
         p.dirs.sort()
         return p
+    }
+
+    /// Pas d'arrondi des dates de la destination (2 s, 1 s ou 10 ms) quand elle est moins précise que la source ; 0 sinon.
+    static func coarseGrain(source: [String: Entry], destination: [String: Entry]) -> TimeInterval {
+        let srcDates = source.values.filter { !$0.isDir }.map(\.mtime)
+        let dstDates = destination.values.filter { !$0.isDir }.map(\.mtime)
+        guard !srcDates.isEmpty, !dstDates.isEmpty else { return 0 }
+        func share(_ dates: [Date], _ grain: TimeInterval) -> Double {
+            Double(dates.filter { isOnGrain($0, grain) }.count) / Double(dates.count)
+        }
+        for grain in [2.0, 1.0, 0.01] where share(dstDates, grain) >= 0.98 && share(srcDates, grain) < 0.98 {
+            return grain
+        }
+        return 0
+    }
+
+    static func isOnGrain(_ date: Date, _ grain: TimeInterval) -> Bool {
+        let steps = date.timeIntervalSince1970 / grain
+        return abs(steps - steps.rounded()) * grain < 0.0005
     }
 
     /// Compare le contenu des fichiers ambigus repérés par `plan` et replace dans les copies ceux qui diffèrent.
@@ -507,6 +616,7 @@ public enum Scanner {
         guard !queue.isEmpty else { return }
         var seen = Set(queue.map(\.entry.rel))
         var widened = Set<String>()
+        var mismatchFolders = Set<String>()
         var index = 0
         while index < queue.count {
             try Task.checkCancellation()
@@ -522,6 +632,7 @@ public enum Scanner {
             plan.largestReplaced = max(plan.largestReplaced, s.size)
             plan.copies.append(s)
             plan.bytesToCopy += s.size
+            mismatchFolders.insert(parentKey(s.rel) ?? "")
             if widened.insert(suspect.folder).inserted {
                 for other in byFolder[suspect.folder] ?? [] where seen.insert(other.rel).inserted {
                     queue.append(SyncPlan.Suspect(entry: other, folder: suspect.folder))
@@ -529,22 +640,24 @@ public enum Scanner {
             }
         }
         plan.verified = queue.count
+        plan.mismatchFolders = mismatchFolders.sorted()
         plan.copies.sort { $0.rel.localizedStandardCompare($1.rel) == .orderedAscending }
     }
 
-    /// Compare le début, le milieu et la fin de deux fichiers de même taille (les fichiers courts en entier).
+    /// Compare cinq échantillons de 64 Kio répartis du début à la fin de deux fichiers de même taille
+    /// (les fichiers courts en entier). Deux photos différentes diffèrent partout ; une retouche limitée
+    /// à une petite zone située entre deux échantillons peut en revanche passer inaperçue.
     static func sameSamples(_ a: URL, _ b: URL, size: Int64) -> Bool {
         let chunk: Int64 = 64 << 10
+        let windows: Int64 = 5
         guard let ha = try? FileHandle(forReadingFrom: a), let hb = try? FileHandle(forReadingFrom: b) else { return false }
         defer { try? ha.close(); try? hb.close() }
-        var ranges: [(UInt64, Int)] = [(0, Int(min(size, chunk)))]
-        if size <= 3 * chunk {
+        var ranges: [(UInt64, Int)] = []
+        if size <= windows * chunk {
             ranges = [(0, Int(size))]
         } else {
-            let middle = UInt64(size / 2 - chunk / 2)
-            let end = UInt64(size - chunk)
-            ranges.append((middle, Int(chunk)))
-            ranges.append((end, Int(chunk)))
+            let step = (size - chunk) / (windows - 1)
+            for i in 0..<windows { ranges.append((UInt64(i * step), Int(chunk))) }
         }
         for (offset, length) in ranges {
             do {
@@ -564,6 +677,10 @@ public enum Scanner {
 public enum SyncRunner {
     /// Nombre d'échecs d'affilée au-delà duquel on vérifie que la destination accepte encore l'écriture.
     static let maxConsecutiveFailures = 25
+    /// Au-delà, quelque chose ne va pas du tout : inutile d'aligner des milliers d'erreurs.
+    static let maxFailures = 1_000
+    /// Ancienne version d'un fichier mise de côté pendant un remplacement (voir `replace`).
+    static let asidePrefix = Scanner.tempPrefix + "avant-"
 
     /// `acknowledged` : l'utilisateur a explicitement confirmé les situations signalées par `plan.risks`.
     public static func run(plan: SyncPlan, roots: Roots, acknowledged: Bool, onProgress: (SyncProgress) -> Void) -> SyncResult {
@@ -631,6 +748,8 @@ public enum SyncRunner {
                 abort("La source ou la destination n'est plus accessible. Synchronisation interrompue.")
             } else if isOutOfSpace(error) {
                 abort("La destination est pleine. Synchronisation interrompue.")
+            } else if prog.failed >= maxFailures {
+                abort("\(plural(maxFailures, "erreur", "erreurs")) : synchronisation interrompue. Consultez le journal.")
             } else if consecutive >= maxConsecutiveFailures {
                 // Un seul dossier défectueux ne doit pas priver de sauvegarde tous ceux qui suivent :
                 // on n'arrête que si la destination entière refuse l'écriture.
@@ -665,7 +784,17 @@ public enum SyncRunner {
             errors.append("\(conflict.rel) — non copié : \(conflict.reason)")
             prog.failed += 1
         }
-        for t in plan.temps { try? fm.removeItem(at: t) }
+        // Restes de copies interrompues. Une ancienne version mise de côté n'est retirée qu'à la fin :
+        // tant que la nouvelle copie n'a pas abouti, elle peut être la seule qui reste.
+        func clean(_ temp: URL) {
+            try? fm.removeItem(at: temp)
+            if fm.fileExists(atPath: temp.path) {
+                errors.append("\(temp.lastPathComponent) — reste d'une copie interrompue impossible à retirer")
+                prog.failed += 1
+            }
+        }
+        let asides = plan.temps.filter { $0.lastPathComponent.hasPrefix(asidePrefix) }
+        for t in plan.temps where !t.lastPathComponent.hasPrefix(asidePrefix) { clean(t) }
 
         prog.phase = .deleting
         let srcComponents = RootCheck.components(src)
@@ -679,7 +808,13 @@ public enum SyncRunner {
                 fail(item.rel, SyncError("refus d'effacer un dossier qui contient la source"))
             } else {
                 do {
-                    try fm.removeItem(at: dst.appendingPathComponent(item.rel))
+                    do {
+                        try fm.removeItem(at: dst.appendingPathComponent(item.rel))
+                    } catch CocoaError.fileNoSuchFile {
+                        // Certains volumes (exFAT) ne retrouvent un nom accentué que sous la forme exacte où il a été écrit.
+                        let composed = dst.path + "/" + item.rel.precomposedStringWithCanonicalMapping
+                        guard removefile(composed, nil, removefile_flags_t(REMOVEFILE_RECURSIVE)) == 0 else { throw posixError() }
+                    }
                     prog.deleted += item.files
                     deletedItems.append(item.rel)
                     consecutive = 0
@@ -728,6 +863,7 @@ public enum SyncRunner {
             }
         }
 
+        if abortReason == nil && !Task.isCancelled { asides.forEach(clean) }
         return finish()
     }
 
@@ -809,7 +945,8 @@ public enum SyncRunner {
             try replace(tmp: tmp, target: to)
 
             // Certains volumes (exFAT avec étiquettes) perdent la date de création au renommage : on la repose au besoin.
-            if let now = (try? fm.attributesOfItem(atPath: to.path))?[.creationDate] as? Date,
+            if created <= modified,
+               let now = (try? fm.attributesOfItem(atPath: to.path))?[.creationDate] as? Date,
                abs(now.timeIntervalSince(created)) > 2 {
                 try? fm.setAttributes([.creationDate: created], ofItemAtPath: to.path)
                 try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: to.path)
@@ -830,7 +967,7 @@ public enum SyncRunner {
         // Certains serveurs refusent d'écraser un fichier lors d'un renommage. On écarte alors l'ancienne version
         // sous un nom temporaire (retiré à la prochaine synchronisation s'il devait rester) et on la remet en cas d'échec.
         let aside = target.deletingLastPathComponent()
-            .appendingPathComponent(Scanner.tempPrefix + "avant-" + UUID().uuidString.prefix(8))
+            .appendingPathComponent(asidePrefix + UUID().uuidString.prefix(8))
         guard rename(target.path, aside.path) == 0 else { throw posixError(code) }
         if rename(tmp.path, target.path) == 0 {
             try? FileManager.default.removeItem(at: aside)

@@ -97,6 +97,13 @@ public enum Mounter {
         return String(s[s.index(after: at)...])
     }
 
+    /// Identité stable d'un partage monté, à partir de « //utilisateur@hôte/partage » : la même quel que soit
+    /// le compte, la casse ou la forme du nom d'hôte (Bonjour, .local) utilisés pour le monter.
+    static func canonicalMountSource(_ from: String) -> String? {
+        guard let source = mountSource(from) else { return nil }
+        return "smb://\(normalizedHost(source.host))/\(RootCheck.normalize(source.share))"
+    }
+
     /// Décompose « //utilisateur@hôte/partage » tel que renvoyé par statfs.
     private static func mountSource(_ from: String) -> (host: String, share: String)? {
         let comps = from.drop(while: { $0 == "/" }).split(separator: "/", maxSplits: 1)

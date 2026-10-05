@@ -118,6 +118,11 @@ struct TaskRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(preset.name + (model.isDirty(preset.id) ? " •" : ""))
                 Text(caption).font(.caption).foregroundStyle(.secondary)
+                if let issue = preset.lastIssue, !model.isActive(preset.id) {
+                    // Une tentative ratée doit rester visible, même quand une autre tâche est affichée.
+                    Label(issue, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange).labelStyle(.titleAndIcon)
+                }
             }
         } icon: {
             if model.isActive(preset.id) {
@@ -164,10 +169,16 @@ struct PresetDetail: View {
                     Button(model.stopping ? "Arrêt en cours…" : "Arrêter", role: .cancel) { model.stop() }
                         .disabled(model.stopping || model.isPreview)
                 } else {
-                    Button { model.analyze(preset) } label: {
+                    Menu {
+                        Button("Synchroniser en comparant tout le contenu (lent)…") { model.analyze(preset, verifyAll: true) }
+                    } label: {
                         Label("Synchroniser…", systemImage: "arrow.triangle.2.circlepath")
+                    } primaryAction: {
+                        model.analyze(preset)
                     }
+                    .menuStyle(.button)
                     .buttonStyle(.borderedProminent)
+                    .fixedSize()
                     .disabled(model.isBusy || dirty || preset.source.isEmpty || preset.destination.isEmpty)
                     .help(startHelp)
                 }
@@ -317,7 +328,9 @@ struct PathRow: View {
         let fm = FileManager.default
         if fm.fileExists(atPath: path) { return nil }
         // Un dossier de destination absent sera créé, mais seulement si son dossier parent existe.
-        if kind == .destination, fm.fileExists(atPath: (path as NSString).deletingLastPathComponent) { return ("Sera créé", false) }
+        let parent = (path as NSString).deletingLastPathComponent
+        // « /Volumes/Nom » absent : c'est un disque qui n'est pas branché, pas un dossier à créer.
+        if kind == .destination, parent != "/Volumes", fm.fileExists(atPath: parent) { return ("Sera créé", false) }
         return ("Introuvable — disque débranché ?", true)
     }
 
@@ -561,7 +574,7 @@ struct DoneView: View {
                         .font(.caption)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 80)
+                    .frame(height: min(80, CGFloat(min(errors.count, Self.shownErrors) + (errors.count > Self.shownErrors ? 1 : 0)) * 16 + 4))
                 }
             } else if !outcome.sourceEmpty {
                 Text("\(Fmt.count(outcome.unchanged, "fichier identique", "fichiers identiques")) sur la source et la destination.")
@@ -637,32 +650,27 @@ struct PreviewSheet: View {
                 }
                 .pickerStyle(.segmented).labelsHidden()
 
-                List {
-                    if tab == 0 {
-                        ForEach(plan.deletes.prefix(Self.shown)) { item in
-                            HStack {
-                                Label(item.rel, systemImage: item.isDir ? "folder" : "doc").foregroundStyle(.red)
-                                Spacer()
-                                Text(item.isDir
-                                     ? "\(Fmt.count(item.files, "fichier", "fichiers")) · \(Fmt.bytes(item.bytes))"
-                                     : Fmt.bytes(item.bytes))
-                                    .foregroundStyle(.secondary)
+                // Lignes simples, sans sélection : un défilement paresseux suffit et évite la lourdeur d'une table.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if tab == 0 {
+                            ForEach(plan.deletes.prefix(Self.shown)) { item in
+                                row(item.rel, item.isDir ? "folder" : "doc", .red,
+                                    item.isDir ? "\(Fmt.count(item.files, "fichier", "fichiers")) · \(Fmt.bytes(item.bytes))" : Fmt.bytes(item.bytes))
                             }
-                        }
-                        more(plan.deletes.count)
-                    } else {
-                        ForEach(plan.copies.prefix(Self.shown), id: \.rel) { entry in
-                            HStack {
-                                Label(entry.rel, systemImage: "doc")
-                                Spacer()
-                                Text(Fmt.bytes(entry.size)).foregroundStyle(.secondary)
+                            more(plan.deletes.count)
+                        } else {
+                            ForEach(plan.copies.prefix(Self.shown), id: \.rel) { entry in
+                                row(entry.rel, "doc", .primary, Fmt.bytes(entry.size))
                             }
+                            more(plan.copies.count)
                         }
-                        more(plan.copies.count)
                     }
                 }
                 .font(.callout)
-                .listStyle(.bordered)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.background)
+                .overlay(Rectangle().strokeBorder(.separator))
             }
 
             notes
@@ -726,6 +734,9 @@ struct PreviewSheet: View {
             if plan.contentMismatches > 0 {
                 note("\(Fmt.count(plan.contentMismatches, "fichier a", "fichiers ont")) la même taille et la même date sur la destination, mais un contenu différent : recopie prévue.",
                      "doc.on.doc", .secondary)
+            } else if plan.verified > 0 {
+                note("Le contenu de \(Fmt.count(plan.verified, "fichier ambigu a été comparé", "fichiers ambigus a été comparé")) : aucune différence.",
+                     "doc.on.doc", .secondary)
             }
             if !plan.keptDirs.isEmpty {
                 note(plan.keptDirs.count == 1
@@ -740,7 +751,11 @@ struct PreviewSheet: View {
                      "exclamationmark.triangle.fill", .orange)
             }
             if !plan.renames.isEmpty {
-                note("\(Fmt.count(plan.renames.count, "élément sera renommé", "éléments seront renommés")) sur la destination : seules les majuscules de leur nom ont changé.",
+                note((plan.renames.count == 1
+                      ? "1 élément sera renommé sur la destination, seules les majuscules de son nom ont changé : "
+                      : "\(plan.renames.count.formatted()) éléments seront renommés sur la destination, seules les majuscules de leur nom ont changé : ")
+                     + plan.renames.prefix(3).map { "« \($0.from) » → « \(($0.to as NSString).lastPathComponent) »" }.joined(separator: ", ")
+                     + (plan.renames.count > 3 ? "…" : "."),
                      "character.cursor.ibeam", .secondary)
             }
             if !plan.temps.isEmpty {
@@ -772,6 +787,18 @@ struct PreviewSheet: View {
         .font(.callout)
     }
 
+    private func row(_ text: String, _ symbol: String, _ color: Color, _ detail: String) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label(text, systemImage: symbol).foregroundStyle(color).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Text(detail).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            Divider()
+        }
+    }
+
     private func note(_ text: String, _ symbol: String, _ color: Color) -> some View {
         Label(text, systemImage: symbol)
             .foregroundStyle(color)
@@ -784,7 +811,8 @@ struct PreviewSheet: View {
 
     @ViewBuilder private func more(_ total: Int) -> some View {
         if total > Self.shown {
-            Text("… et \((total - Self.shown).formatted()) autres. La liste complète figurera dans le journal de la synchronisation.").foregroundStyle(.secondary)
+            Text("… et \((total - Self.shown).formatted()) autres. La liste complète figurera dans le journal de la synchronisation.")
+                .foregroundStyle(.secondary).padding(8)
         }
     }
 }

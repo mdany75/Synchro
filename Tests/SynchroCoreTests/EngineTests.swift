@@ -36,13 +36,21 @@ final class Sandbox {
         (try? Data(contentsOf: base.appendingPathComponent(rel))).map { String(decoding: $0, as: UTF8.self) }
     }
 
-    func plan(excludes: [String] = [], ignoreHidden: Bool = true) throws -> SyncPlan {
+    func plan(excludes: [String] = [], ignoreHidden: Bool = true, reference: PlanOptions.Reference = .none,
+              verifyFolders: Set<String> = [], verifyAll: Bool = false) throws -> SyncPlan {
         let ex = Set(excludes.map(Scanner.excludeKey))
         let s = try Scanner.scan(root: src, excludes: ex, ignoreHidden: ignoreHidden) { _ in }
         let d = try Scanner.scan(root: dst, excludes: ex, ignoreHidden: ignoreHidden, flagHides: false) { _ in }
-        var plan = Scanner.plan(source: s, destination: d, caseInsensitive: RootCheck.isCaseInsensitive(at: dst))
+        let options = PlanOptions(caseInsensitive: RootCheck.isCaseInsensitive(at: dst), reference: reference,
+                                  verifyFolders: verifyFolders, verifyAll: verifyAll)
+        var plan = Scanner.plan(source: s, destination: d, options: options)
         try Scanner.verifySuspects(&plan, src: src, dst: dst) { _, _ in }
         return plan
+    }
+
+    @discardableResult
+    func run(_ plan: SyncPlan, acknowledged: Bool = false) -> SyncResult {
+        SyncRunner.run(plan: plan, roots: Roots(src: src, dst: dst), acknowledged: acknowledged) { _ in }
     }
 
     @discardableResult
@@ -905,4 +913,164 @@ private func mirrorIsExact(_ box: Sandbox) throws -> Bool {
     let result = try box.sync()
     #expect(result.copiedFiles == ["nouveau.txt"])
     #expect(result.deletedItems == ["vieux"])
+}
+
+// MARK: - Troisième série
+
+/// Régression : après une renumérotation, une seule recopie en échec laissait un contenu faux sur la destination,
+/// et l'analyse suivante annonçait « tout est à jour » puisque plus rien ne bougeait dans le dossier.
+@Test func reparationInacheveeReprise() throws {
+    let box = try Sandbox()
+    try burst(box, count: 8, perSecond: 5) { _ in 4_000 }
+    try box.sync()
+    try cullFirstAndRenumber(box, count: 8)
+
+    let blocked = box.src.appendingPathComponent("DSCF0005.RAF")
+    try box.fm.setAttributes([.posixPermissions: 0], ofItemAtPath: blocked.path)
+    let first = try box.plan()
+    #expect(first.mismatchFolders == [""])
+    let result = box.run(first)
+    try box.fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: blocked.path)
+    #expect(result.progress.failed == 1)
+    #expect(try !mirrorIsExact(box))
+
+    // Ce que l'app retient : les dossiers dont une recopie n'a pas abouti.
+    let missing = Set(first.copies.map(\.rel)).subtracting(result.copiedFiles)
+    let pending = Set(missing.map { ($0 as NSString).deletingLastPathComponent })
+    #expect(pending == [""])
+
+    let second = try box.plan(verifyFolders: pending)
+    #expect(second.contentMismatches == 1)
+    #expect(box.run(second).succeeded)
+    #expect(try mirrorIsExact(box))
+    #expect(try box.plan(verifyFolders: pending).isEmpty)
+}
+
+/// Un fichier réécrit sur place, même taille, date de modification remise comme avant : seule la date de
+/// changement du fichier, qu'un programme ne peut pas antidater, trahit la réécriture.
+@Test func fichierReecritSurPlaceAvecLaMemeDate() throws {
+    let box = try Sandbox()
+    let photo = try box.write("Album/photo.dng", in: box.src, String(repeating: "a", count: 5_000), mtime: old)
+    try box.write("Album/autre.jpg", in: box.src, "autre", mtime: old.addingTimeInterval(60))
+    let analysisStart = Date()
+    try box.sync()
+
+    Thread.sleep(forTimeInterval: 0.05)
+    try Data(String(repeating: "b", count: 5_000).utf8).write(to: photo)
+    try box.fm.setAttributes([.modificationDate: old], ofItemAtPath: photo.path)
+
+    #expect(try box.plan().isEmpty)   // sans repère, taille et date identiques : la limite connue
+    let byHistory = try box.plan(reference: .date(analysisStart))
+    #expect(byHistory.copies.map(\.rel) == ["Album/photo.dng"])
+    let byCopy = try box.plan(reference: .destinationCopy)
+    #expect(byCopy.copies.map(\.rel) == ["Album/photo.dng"])
+    #expect(box.run(byCopy).succeeded)
+    #expect(box.read("Album/photo.dng", in: box.dst)?.hasPrefix("bbb") == true)
+    #expect(try box.plan(reference: .destinationCopy).isEmpty)
+}
+
+@Test func comparaisonCompleteALaDemande() throws {
+    let box = try Sandbox()
+    let photo = try box.write("photo.dng", in: box.src, String(repeating: "a", count: 5_000), mtime: old)
+    try box.write("autre.jpg", in: box.src, "autre", mtime: old)
+    try box.sync()
+    try Data(String(repeating: "b", count: 5_000).utf8).write(to: photo)
+    try box.fm.setAttributes([.modificationDate: old], ofItemAtPath: photo.path)
+
+    let plan = try box.plan(verifyAll: true)
+    #expect(plan.verified == 2)
+    #expect(plan.copies.map(\.rel) == ["photo.dng"])
+}
+
+/// Sur une destination qui arrondit les dates (exFAT, HFS+), l'écart d'arrondi ne doit pas faire comparer
+/// tout un dossier chaque fois qu'on y ajoute une photo.
+@Test func destinationAuxDatesArrondies() throws {
+    let box = try Sandbox()
+    for i in 0..<60 {
+        try box.write("p\(i).jpg", in: box.src, "photo \(i)", mtime: old.addingTimeInterval(Double(i) * 60 + 0.37))
+    }
+    try box.sync()
+    for i in 0..<60 {
+        let exact = old.addingTimeInterval(Double(i) * 60 + 0.37).timeIntervalSince1970
+        try box.fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: exact.rounded(.down))],
+                                 ofItemAtPath: box.dst.appendingPathComponent("p\(i).jpg").path)
+    }
+    try box.write("nouvelle.jpg", in: box.src)
+    let plan = try box.plan()
+    #expect(plan.copies.count == 1)
+    #expect(plan.unchanged == 60)
+    #expect(plan.verified == 0)
+}
+
+@Test func sondeDeCasse() throws {
+    #expect(RootCheck.asciiCaseSwapped("Straße µ43") == "sTRAßE µ43")
+    #expect(RootCheck.asciiCaseSwapped("2024") == "2024")
+    let box = try Sandbox()
+    try box.write("Straße/img.jpg", in: box.dst)
+    #expect(RootCheck.isCaseInsensitive(at: box.dst))
+    try box.fm.removeItem(at: box.dst.appendingPathComponent("Straße"))
+    try box.write("2024/photo.jpg", in: box.dst)
+    // Racine sans aucune lettre : on se rabat sur un élément plus profond de l'analyse.
+    #expect(RootCheck.isCaseInsensitive(at: box.dst, samples: ["2024/photo.jpg"]))
+}
+
+@Test func identiteDUnPartageReseau() {
+    let a = Mounter.canonicalMountSource("//admin@QNAP-Maison/Backup")
+    #expect(a == "smb://qnap-maison/backup")
+    #expect(Mounter.canonicalMountSource("//invite@qnap-maison._smb._tcp.local/BACKUP") == a)
+    #expect(Mounter.canonicalMountSource("//QNAP-Maison.local/Backup") == a)
+    #expect(Mounter.canonicalMountSource("//admin@nas/Mes%20Photos") == "smb://nas/mes photos")
+    #expect(Mounter.canonicalMountSource("//admin@autre-nas/Backup") != a)
+}
+
+@Test func deuxDossiersFondusNeSontPasRenommes() {
+    var source = ScanResult(), destination = ScanResult()
+    for rel in ["Dir", "dir"] { source.entries[rel] = Entry(rel: rel, isDir: true, size: 0, mtime: old) }
+    source.entries["Dir/x.txt"] = Entry(rel: "Dir/x.txt", isDir: false, size: 1, mtime: old)
+    source.entries["dir/y.txt"] = Entry(rel: "dir/y.txt", isDir: false, size: 1, mtime: old)
+    destination.entries["Dir"] = Entry(rel: "Dir", isDir: true, size: 0, mtime: old)
+    destination.entries["Dir/x.txt"] = Entry(rel: "Dir/x.txt", isDir: false, size: 1, mtime: old)
+    destination.entries["Dir/y.txt"] = Entry(rel: "Dir/y.txt", isDir: false, size: 1, mtime: old)
+    for _ in 0..<20 {   // l'ordre d'un dictionnaire varie : le plan ne doit pas en dépendre
+        let plan = Scanner.plan(source: source, destination: destination, caseInsensitive: true)
+        #expect(plan.isEmpty)
+    }
+}
+
+@Test func elementMasqueQuiNExisteQueSurLaDestination() throws {
+    let box = try Sandbox()
+    try box.write("garde.txt", in: box.src, mtime: old)
+    try box.write("garde.txt", in: box.dst, mtime: old)
+    try box.write("Service/index.dat", in: box.dst)
+    try box.write("Thumbs.db", in: box.dst)
+    var folder = box.dst.appendingPathComponent("Service")
+    var values = URLResourceValues()
+    values.isHidden = true
+    try folder.setResourceValues(values)
+
+    #expect(try box.plan().isEmpty)   // ni le dossier masqué du NAS, ni le fichier de service de Windows
+    #expect(try box.plan(ignoreHidden: false).deletes.map(\.rel) == ["Service"])
+}
+
+@Test func ancienneVersionMiseDeCoteRetireeEnFinDeSynchro() throws {
+    let box = try Sandbox()
+    try box.write("a.txt", in: box.src)
+    try box.write(SyncRunner.asidePrefix + "abcd1234", in: box.dst, "ancienne version restée de côté")
+    #expect(try box.sync().succeeded)
+    #expect(try box.fm.contentsOfDirectory(atPath: box.dst.path) == ["a.txt"])
+}
+
+@Test func fichiersEnTailleSuffisantePourEtreEchantillonnes() throws {
+    let box = try Sandbox()
+    var data = Data(count: 600 << 10)
+    let a = box.root.appendingPathComponent("a.bin"), b = box.root.appendingPathComponent("b.bin")
+    try data.write(to: a)
+    for offset in [0, 150 << 10, 300 << 10, 450 << 10, (600 << 10) - 1] {   // un octet dans chacune des cinq fenêtres
+        data[offset] = 1
+        try data.write(to: b)
+        #expect(!Scanner.sameSamples(a, b, size: Int64(data.count)))
+        data[offset] = 0
+    }
+    try data.write(to: b)
+    #expect(Scanner.sameSamples(a, b, size: Int64(data.count)))
 }

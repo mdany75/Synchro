@@ -17,6 +17,13 @@ struct Preset: Identifiable, Codable, Hashable {
     /// Destination et volume de la dernière synchronisation, pour remarquer qu'un autre disque a pris sa place.
     var syncedDestination: String?
     var syncedVolume: String?
+    /// Début de l'analyse qui a précédé la dernière synchronisation réussie : tout fichier de la source
+    /// touché depuis verra son contenu comparé, même si sa taille et sa date n'ont pas bougé.
+    var verifiedSince: Date?
+    /// Dossiers où une différence de contenu a été trouvée sans que la recopie aboutisse : à recomparer.
+    var pendingFolders: [String] = []
+    /// Dernière tentative qui ne s'est pas bien terminée, pour l'afficher dans la liste des tâches.
+    var lastIssue: String?
 
     static let example = Preset(
         name: "SSD Photos → NAS",
@@ -43,6 +50,9 @@ struct Preset: Identifiable, Codable, Hashable {
         lastSync = try c.decodeIfPresent(Date.self, forKey: .lastSync)
         syncedDestination = try c.decodeIfPresent(String.self, forKey: .syncedDestination)
         syncedVolume = try c.decodeIfPresent(String.self, forKey: .syncedVolume)
+        verifiedSince = try c.decodeIfPresent(Date.self, forKey: .verifiedSince)
+        pendingFolders = try c.decodeIfPresent([String].self, forKey: .pendingFolders) ?? []
+        lastIssue = try c.decodeIfPresent(String.self, forKey: .lastIssue)
     }
 
     /// La même tâche, avec l'état de synchronisation d'une autre.
@@ -51,6 +61,9 @@ struct Preset: Identifiable, Codable, Hashable {
         copy.lastSync = other?.lastSync
         copy.syncedDestination = other?.syncedDestination
         copy.syncedVolume = other?.syncedVolume
+        copy.verifiedSince = other?.verifiedSince
+        copy.pendingFolders = other?.pendingFolders ?? []
+        copy.lastIssue = other?.lastIssue
         return copy
     }
 
@@ -125,13 +138,20 @@ final class AppModel: ObservableObject {
     var reopenWindow: (() -> Void)?
 
     private var roots: Roots?
+    /// Début de l'analyse qui a produit le plan affiché.
+    private var analysisStart = Date()
+    /// Un aperçu plus vieux que cela ne reflète plus forcément la destination : il faut refaire l'analyse.
+    static let previewLifetime: TimeInterval = 30 * 60
     private var task: Task<Void, Never>?
     private var saveFailed = false
     /// Le fichier des tâches est illisible et n'a pas pu être mis de côté : on ne l'écrase pas.
     private var saveBlocked = false
 
+    /// Dossier de rechange pour les tests, qui ne doivent jamais toucher aux tâches de l'utilisateur.
+    nonisolated(unsafe) static var storeOverride: URL?
+
     nonisolated static var storeFolder: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = storeOverride ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Synchro")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -145,6 +165,9 @@ final class AppModel: ObservableObject {
         storeAlert = alert
         saveBlocked = blocked
         selection = presets.first?.id
+        // Des tâches invalides ont été écartées (une copie du fichier est gardée) : on réécrit le fichier assaini,
+        // sinon la même alerte et une nouvelle copie reviendraient à chaque lancement.
+        if alert != nil && !blocked { save() }
 
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
@@ -285,7 +308,9 @@ final class AppModel: ObservableObject {
     func saveDraft(_ id: UUID) {
         guard let draft = drafts[id], let i = presets.firstIndex(where: { $0.id == id }) else { return }
         // Le brouillon a pu être créé avant la fin d'une synchro : l'état enregistré fait foi.
-        presets[i] = draft.withRunState(of: presets[i])
+        // Si la source ou la destination change, ce n'est plus la même sauvegarde : son historique ne vaut plus.
+        let sameFolders = draft.source == presets[i].source && draft.destination == presets[i].destination
+        presets[i] = draft.withRunState(of: sameFolders ? presets[i] : nil)
         drafts[id] = nil
     }
 
@@ -329,15 +354,24 @@ final class AppModel: ObservableObject {
     }
 
     /// Note qu'une synchronisation vient de réussir (ou que la sauvegarde a été trouvée à jour).
-    private func markSynced(_ id: UUID?, at date: Date, roots: Roots) {
+    private func markSynced(_ id: UUID?, at date: Date, roots: Roots, analysisStart: Date) {
         guard let i = presets.firstIndex(where: { $0.id == id }) else { return }
         presets[i].lastSync = date
         presets[i].syncedDestination = presets[i].destination
         presets[i].syncedVolume = roots.dstVolume?.identity
+        presets[i].verifiedSince = analysisStart
+        presets[i].pendingFolders = []
+        presets[i].lastIssue = nil
+    }
+
+    private func update(_ id: UUID?, _ change: (inout Preset) -> Void) {
+        guard let i = presets.firstIndex(where: { $0.id == id }) else { return }
+        change(&presets[i])
     }
 
     /// Étape 1 : analyse la source et la destination, puis présente l'aperçu. Rien n'est modifié.
-    func analyze(_ preset: Preset) {
+    /// `verifyAll` : comparer aussi le contenu de tous les fichiers qui paraissent inchangés (lent).
+    func analyze(_ preset: Preset, verifyAll: Bool = false) {
         guard !isBusy, !isDirty(preset.id) else { return }
         activePreset = preset.id
         phase = .scanning
@@ -396,8 +430,14 @@ final class AppModel: ObservableObject {
                 }
                 try Task.checkCancellation()
 
-                var plan = Scanner.plan(source: srcScan, destination: dstScan,
-                                        caseInsensitive: RootCheck.isCaseInsensitive(at: dst))
+                var options = PlanOptions(verifyFolders: Set(preset.pendingFolders), verifyAll: verifyAll)
+                options.caseInsensitive = RootCheck.isCaseInsensitive(
+                    at: dst, samples: dstScan.entries.values.lazy.filter { !$0.isDir }.prefix(50).map(\.rel))
+                // Sans historique pour cette destination, on n'a pas de repère fiable : la règle ne s'applique pas encore.
+                if let since = preset.verifiedSince, preset.syncedDestination == preset.destination {
+                    options.reference = .date(since)
+                }
+                var plan = Scanner.plan(source: srcScan, destination: dstScan, options: options)
                 plan.destinationExists = dstExists
                 try Scanner.verifySuspects(&plan, src: src, dst: dst) { done, total in
                     status("Comparaison du contenu — \(done.formatted()) / \(total.formatted())")
@@ -417,10 +457,11 @@ final class AppModel: ObservableObject {
                     guard let self else { return }
                     self.stopping = false
                     let nothingToDo = ready.isEmpty && ready.conflicts.isEmpty
+                    self.analysisStart = started
                     if nothingToDo {
                         // Rien à confirmer : on l'affiche dans la fenêtre au lieu d'ouvrir un aperçu vide.
                         let now = Date()
-                        if ready.sourceFiles > 0 { self.markSynced(preset.id, at: now, roots: roots) }
+                        if ready.sourceFiles > 0 { self.markSynced(preset.id, at: now, roots: roots, analysisStart: started) }
                         self.plan = nil
                         self.phase = .done(Outcome(result: nil, unchanged: ready.unchanged, finishedAt: now, journal: nil,
                                                    sourceEmpty: ready.sourceFiles == 0))
@@ -431,13 +472,21 @@ final class AppModel: ObservableObject {
                         self.phase = .preview
                     }
                     // L'analyse d'un NAS peut durer : on prévient si l'utilisateur est passé à autre chose.
-                    if !NSApp.isActive || Date().timeIntervalSince(started) > 20 {
-                        NSApp.requestUserAttention(.informationalRequest)
+                    if !NSApplication.shared.isActive || Date().timeIntervalSince(started) > 20 {
+                        NSApplication.shared.requestUserAttention(.informationalRequest)
+                        let title: String
+                        if nothingToDo {
+                            title = ready.sourceFiles > 0 ? "Tout est déjà à jour" : "Rien à synchroniser"
+                        } else if ready.blockedReason != nil {
+                            title = "Analyse terminée — suppression bloquée"
+                        } else {
+                            title = "Analyse terminée — à vous de confirmer"
+                        }
                         Notifier.shared.post(
-                            title: nothingToDo ? (ready.sourceFiles > 0 ? "Tout est déjà à jour" : "Rien à synchroniser")
-                                               : "Analyse terminée — confirmation requise",
-                            body: nothingToDo ? preset.name
-                                              : "\(preset.name) — \(Fmt.count(ready.copies.count, "fichier à copier", "fichiers à copier")), \(ready.filesToDelete.formatted()) à effacer",
+                            title: title,
+                            body: nothingToDo || (ready.copies.isEmpty && ready.deletes.isEmpty)
+                                ? preset.name
+                                : "\(preset.name) — \(Fmt.count(ready.copies.count, "fichier à copier", "fichiers à copier")), \(ready.filesToDelete.formatted()) à effacer",
                             sound: "Glass")
                     }
                 }
@@ -451,7 +500,7 @@ final class AppModel: ObservableObject {
                 self?.onMain {
                     self?.stopping = false
                     self?.phase = .failed(message)
-                    if !NSApp.isActive {
+                    if !NSApplication.shared.isActive {
                         Notifier.shared.post(title: "Analyse impossible", body: "\(preset.name) — \(message)", sound: "Basso")
                     }
                 }
@@ -464,12 +513,21 @@ final class AppModel: ObservableObject {
     func confirm(acknowledged: Bool) {
         guard isPreview, let plan, let roots, let preset = presets.first(where: { $0.id == activePreset }),
               !plan.isEmpty, plan.blockedReason == nil, plan.risks.isEmpty || acknowledged else { return }
+        let analysisStart = analysisStart
+        guard Date().timeIntervalSince(analysisStart) < Self.previewLifetime else {
+            // La destination a pu changer entre-temps : exécuter un vieux plan donnerait une sauvegarde incomplète.
+            self.plan = nil
+            phase = .failed("Cet aperçu date de plus de 30 minutes : rien n'a été modifié. Relancez la synchronisation pour repartir d'une analyse à jour.")
+            return
+        }
+        // Noté avant de commencer : si la synchronisation est coupée net, ces dossiers seront recomparés.
+        update(preset.id) { $0.pendingFolders = Array(Set($0.pendingFolders).union(plan.mismatchFolders)).sorted() }
         phase = .running
         stopping = false
         progress = SyncProgress(bytesTotal: plan.bytesToCopy, deleteItemsTotal: plan.deletes.count)
         let activity = keepAwake("Synchronisation en cours")
         let journal = Journal.begin(task: preset.name, source: roots.src.path, destination: preset.destination,
-                                    resolved: roots.dst.path, plan: plan)
+                                    resolved: roots.dst.path, plan: plan, acknowledged: acknowledged)
 
         task = Task.detached { [weak self] in
             let result: SyncResult
@@ -493,7 +551,20 @@ final class AppModel: ObservableObject {
                 self.stopping = false
                 self.phase = .done(Outcome(result: result, unchanged: result.unchanged, finishedAt: result.finishedAt, journal: journal))
                 self.treeToken += 1
-                if result.succeeded { self.markSynced(preset.id, at: result.finishedAt, roots: roots) }
+                if result.succeeded {
+                    self.markSynced(preset.id, at: result.finishedAt, roots: roots, analysisStart: analysisStart)
+                } else {
+                    // Les dossiers où une différence de contenu reste à réparer seront recomparés la prochaine fois.
+                    let missing = Set(plan.copies.map(\.rel)).subtracting(result.copiedFiles)
+                    let unfinished = Set(missing.map { ($0 as NSString).deletingLastPathComponent })
+                    let when = Fmt.dateTime(result.finishedAt)
+                    self.update(preset.id) {
+                        $0.pendingFolders = $0.pendingFolders.filter { unfinished.contains($0) }
+                        $0.lastIssue = result.cancelled ? "Arrêtée le \(when)"
+                            : result.abortReason != nil ? "Interrompue le \(when)"
+                            : "\(Fmt.count(result.errors.count, "erreur", "erreurs")) le \(when)"
+                    }
+                }
                 guard !result.cancelled else { return }
                 let p = result.progress
                 let title: String
@@ -511,6 +582,11 @@ final class AppModel: ObservableObject {
                     sound: result.succeeded ? "Glass" : "Basso")
             }
         }
+    }
+
+    /// Pour les tests : fait comme si l'aperçu affiché datait de `interval` secondes de plus.
+    func agePreviewForTesting(by interval: TimeInterval) {
+        analysisStart = analysisStart.addingTimeInterval(-interval)
     }
 
     /// Ferme l'aperçu sans rien exécuter.
