@@ -1,4 +1,5 @@
 import SwiftUI
+import SynchroCore
 
 @main
 struct SynchroApp: App {
@@ -13,39 +14,73 @@ struct SynchroApp: App {
         Window("Synchro", id: "main") {
             ContentView()
                 .environmentObject(model)
-                .frame(minWidth: 860, minHeight: 620)
+                .frame(minWidth: 880, minHeight: 640)
+        }
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Nouvelle tâche") { model.addPreset() }
+                    .keyboardShortcut("n")
+            }
+            CommandGroup(after: .newItem) {
+                Button("Afficher les journaux") {
+                    try? FileManager.default.createDirectory(at: Journal.folder, withIntermediateDirectories: true)
+                    NSWorkspace.shared.open(Journal.folder)
+                }
+            }
         }
     }
 }
 
-/// Mode ligne de commande pour vérifier le moteur sans interface :
-///   Synchro --plan <source> <destination> [--exclude <chemin>]... [--run]
+/// Mode ligne de commande, pour vérifier le moteur sans interface :
+///   Synchro --plan <source> <destination> [--exclude <chemin>]... [--run [--confirmer]]
+/// `--plan` seul n'écrit rien. `--run` exécute le plan aussitôt, sans aperçu à confirmer, avec les garde-fous
+/// du moteur ; `--confirmer` tient lieu de la case à cocher exigée pour une situation inhabituelle.
+/// Les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
 enum CLI {
     static func runIfRequested() {
         var args = Array(CommandLine.arguments.dropFirst())
         guard let i = args.firstIndex(of: "--plan"), args.count >= i + 3 else { return }
-        let src = URL(fileURLWithPath: args[i + 1])
+        let src = URL(fileURLWithPath: args[i + 1]).resolvingSymlinksInPath()
         let dstArg = args[i + 2]
         args.removeSubrange(i...i + 2)
         var excludes: Set<String> = []
         while let e = args.firstIndex(of: "--exclude"), args.count > e + 1 {
-            excludes.insert(Scanner.key(args[e + 1]))
+            excludes.insert(Scanner.excludeKey(args[e + 1]))
             args.removeSubrange(e...e + 1)
         }
         do {
-            let dst = try Mounter.resolve(dstArg)
+            var dst = try Mounter.resolve(dstArg)
+            try RootCheck.validate(src: src, dst: dst)
+            let dstExists = FileManager.default.fileExists(atPath: dst.path)
+            if dstExists { dst = dst.resolvingSymlinksInPath() }
             let s = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: true) { _ in }
-            let d = FileManager.default.fileExists(atPath: dst.path)
-                ? try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: true) { _ in }
-                : Scanner.Result()
-            let plan = Scanner.plan(source: s, destination: d)
-            print("destination: \(dst.path)")
+            let d = dstExists
+                ? try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: true, flagHides: false) { _ in }
+                : ScanResult()
+            var plan = Scanner.plan(source: s, destination: d, caseInsensitive: RootCheck.isCaseInsensitive(at: dst))
+            plan.destinationExists = dstExists
+            try Scanner.verifySuspects(&plan, src: src, dst: dst) { _, _ in }
+            plan.freeSpace = RootCheck.freeSpace(at: dst)
+
+            print("destination: \(dst.path)\(dstExists ? "" : " (à créer)")")
             print("copier: \(plan.copies.count) (\(Fmt.bytes(plan.bytesToCopy)))  effacer: \(plan.filesToDelete) fichiers, \(plan.deletes.count) éléments (\(Fmt.bytes(plan.bytesToDelete)))  inchangés: \(plan.unchanged)  dossiers à créer: \(plan.dirs.count)")
-            for e in plan.deletes.prefix(40) { print("  - \(e.rel)") }
+            if plan.verified > 0 { print("contenu comparé: \(plan.verified), différents: \(plan.contentMismatches)") }
+            for k in plan.keptDirs { print("  = \(k) (conservé : contient un élément ignoré)") }
+            for c in plan.conflicts { print("  ! \(c.rel) (non copié : \(c.reason))") }
+            for r in plan.renames { print("  ~ \(r.from) → \(r.to)") }
+            if !plan.temps.isEmpty { print("  restes de copies interrompues à nettoyer : \(plan.temps.count)") }
+            for c in plan.openCatalogs { print("  ! catalogue Lightroom ouvert : \(c)") }
+            for e in plan.deletes.prefix(40) { print("  - \(e.rel)\(e.isDir ? "/ (\(e.files) fichiers)" : "")") }
             for e in plan.copies.prefix(40) { print("  + \(e.rel)") }
+            if let blocked = plan.blockedReason { print("bloqué: \(blocked)") }
+            for risk in plan.risks { print("risque: \(risk)") }
+            if let missing = plan.spaceShortfall { print("espace insuffisant: il manque \(Fmt.bytes(missing))") }
+
             if args.contains("--run") {
-                let r = SyncRunner.run(plan: plan, src: src, dst: dst) { _ in }
-                print("copiés: \(r.progress.copied)  effacés: \(r.progress.deleted)  durée: \(Fmt.duration(r.progress.elapsed))  vitesse: \(Fmt.speed(r.averageSpeed))  erreurs: \(r.errors)")
+                let r = SyncRunner.run(plan: plan, roots: Roots(src: src, dst: dst), acknowledged: args.contains("--confirmer")) { _ in }
+                print("copiés: \(r.progress.copied)  effacés: \(r.progress.deleted)  échecs: \(r.progress.failed)  durée: \(Fmt.duration(r.progress.elapsed))  vitesse: \(Fmt.speed(r.averageSpeed))")
+                for e in r.errors { print("  ! \(e)") }
+                exit(r.succeeded ? 0 : 2)
             }
             exit(0)
         } catch {

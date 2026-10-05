@@ -2,40 +2,72 @@
 
 # Synchro
 
-Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un disque vers un autre emplacement — typiquement un SSD de photos vers un NAS en SMB. La destination devient une copie exacte de la source : les nouveautés sont copiées, et ce qui n'existe plus dans la source est effacé de la destination.
+Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un disque vers un autre emplacement — typiquement un SSD de photos vers un NAS en SMB. La destination reflète la source : mêmes dossiers, mêmes fichiers, mêmes dates. Les nouveautés sont copiées, et ce qui n'existe pas dans la source est effacé de la destination.
 
 ![Fenêtre de Synchro pendant une synchronisation](docs/capture.png)
 
-*Capture réalisée avec des données fictives.*
+![Aperçu présenté avant toute modification](docs/apercu.png)
+
+*Captures réalisées avec des données fictives.*
 
 ## Fonctions
 
-- **Tâches** : chaque tâche garde sa source, sa destination et ses éléments ignorés. Ajoutez-en autant que voulu.
-- **Aperçu avant d'agir** : Synchro analyse d'abord, puis liste ce qui sera copié et ce qui sera effacé. Rien n'est modifié sans confirmation.
-- **Suivi en direct** : durée, temps restant, vitesse de transfert, volume transféré, nombre de fichiers copiés, effacés et inchangés.
-- **Éléments ignorés** : dans l'arborescence de la source, cliquez la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est ni copié ni effacé de la destination.
-- **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système de macOS (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) sont toujours ignorés.
-- **Destination SMB** : saisissez `smb://serveur/partage/dossier`. Le partage est monté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
-- **Glisser-déposer** d'un dossier ou d'un alias sur les champs Source et Destination.
+- **Tâches** : chaque tâche garde sa source, sa destination et ses éléments ignorés. Ajoutez-en autant que voulu. Au premier lancement, une tâche d'exemple est proposée : remplacez sa source et sa destination par les vôtres.
+- **Aperçu avant d'agir** : Synchro analyse d'abord, puis liste ce qui sera effacé (par dossier, avec le nombre de fichiers et la taille) et ce qui sera copié. Rien n'est modifié sans confirmation.
+- **Suivi en direct** : étape en cours, durée, temps restant, vitesse de transfert, volume transféré, nombre de fichiers copiés, effacés, inchangés et en échec.
+- **Éléments ignorés** : dans l'arborescence de la source, cliquez sur la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est ni copié, ni effacé de la destination, même si son dossier parent disparaît de la source. Le lien « N éléments ignorés » en donne la liste complète.
+- **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) ne sont jamais copiés.
+- **Destination SMB** : `smb://serveur/partage/dossier`. Le partage est connecté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
+- **Glisser-déposer** d'un dossier ou d'un alias sur les lignes Source et Destination.
 - **Modifications confirmées** : les changements d'une tâche ne sont gardés qu'après « Enregistrer », et l'app avertit si vous quittez sans l'avoir fait.
-- **Notification et son** à la fin de chaque synchronisation.
+- **Notification et son** à la fin de la synchronisation, et quand une analyse longue ou faite en arrière-plan attend votre confirmation.
+- **Journal** : chaque synchronisation laisse un fichier texte avec le plan complet (tout ce qui devait être copié ou effacé), le résultat et les erreurs ; si elle a été interrompue, il précise ce qui a réellement été fait (menu Fichier → Afficher les journaux).
+
+## Garde-fous
+
+Une synchronisation en miroir efface des fichiers : Synchro refuse ou fait confirmer les situations qui ressemblent à une erreur.
+
+- **Dossiers imbriqués** : une destination qui contient la source (ou l'inverse) est refusée.
+- **Volume absent** : une source ou une destination située sur un disque qui n'est pas connecté est refusée.
+- **Source vide** : si la source ne contient aucun fichier, toute suppression est bloquée.
+- **Suppression inhabituelle** : si plus du quart de la destination doit être effacé (à partir de 10 fichiers), ou si rien dans la destination ne correspond à la source, une case à cocher supplémentaire est exigée.
+- **Autre volume** : si la destination ne se trouve plus sur le même disque ou le même partage qu'à la dernière synchronisation, la même case à cocher est exigée.
+- **Disque débranché ou remplacé** entre l'aperçu et l'exécution, ou en cours de route : la synchronisation s'arrête sans rien effacer de plus.
+- **Destination pleine ou en lecture seule** : arrêt immédiat avec un message clair, plutôt que des milliers d'erreurs. L'aperçu signale à l'avance un espace libre insuffisant.
+- **Catalogue Lightroom ouvert** : l'aperçu le signale, car une copie prise pendant que Lightroom écrit peut être inutilisable.
+- **Dossier illisible** : l'analyse s'arrête au lieu de le croire vide, ce qui ferait effacer sa sauvegarde.
+- **Conflits** : un fichier qui ne peut pas être copié sans écraser autre chose (deux noms qui ne diffèrent que par les majuscules, un lien symbolique du même nom sur la destination…) est laissé de côté et signalé.
 
 ## Comment ça marche
 
-- Un fichier est recopié si sa taille ou sa date de modification diffère (tolérance de 2 s pour les horodatages SMB).
-- Chaque fichier est écrit sous un nom temporaire puis renommé : une copie interrompue ne laisse jamais de fichier tronqué sous son vrai nom.
+- Un fichier est recopié si sa taille ou sa date de modification diffère (tolérance de 2 s pour les horodatages SMB et exFAT).
+- Même nom, même taille et même date ne prouvent pas le même contenu : des rafales renumérotées après un tri donnent exactement cela. Dans tout dossier où un fichier vient d'être ajouté, remplacé ou retiré, Synchro compare donc aussi un échantillon du contenu des fichiers ambigus (date pas rigoureusement identique, ou voisin de même taille à moins de 2 s) ; dès qu'une différence est trouvée, tout le dossier est comparé. Limite : deux fichiers de même taille et de même date dont on échangerait les noms, sans rien ajouter ni retirer dans le dossier, ne sont pas détectés.
+- Chaque fichier est écrit sous un nom temporaire caché, sa taille est contrôlée, puis il remplace l'ancien : une copie interrompue ne laisse pas de fichier tronqué sous son vrai nom, et l'ancienne version reste en place tant que la nouvelle n'est pas complète. Un reste temporaire éventuel est retiré à la synchronisation suivante.
+- Un fichier modifié pendant sa copie est signalé et recopié à la synchronisation suivante.
+- Sont conservés : la date de modification, la date de création et, quand le serveur l'accepte, les étiquettes, couleurs et commentaires du Finder des fichiers.
+- Ne sont pas recopiés : les permissions, les liens symboliques et autres fichiers spéciaux, les dates et étiquettes des dossiers, et les fichiers cachés (sauf si l'option est décochée). Un changement d'étiquette seul, sans modification du fichier, n'est pas détecté.
 - Les noms accentués sont comparés sous forme Unicode normalisée, pour qu'un « é » du Mac et un « é » du NAS soient reconnus comme identiques.
-- Si la source est vide ou introuvable, toute suppression est bloquée.
-- Les liens symboliques ne sont pas copiés.
-- Le Mac ne se met pas en veille pendant une synchronisation.
+- Si seules les majuscules d'un nom changent (« Islande » devient « islande »), l'élément est renommé sur la destination sans être recopié. Tout autre renommage ou déplacement d'un dossier le fait effacer puis recopier en entier.
+- Quand un dossier disparaît de la source, les fichiers cachés qu'il contenait sur la destination disparaissent avec lui ; seuls les éléments que vous avez marqués ✕ le font conserver.
+- Le Mac ne se met pas en veille pendant l'analyse ni pendant la copie.
 
 ## Installation
 
-Il faut macOS 14 ou plus récent (Apple Silicon ou Intel).
+Il faut macOS 14 ou plus récent. L'app est compilée pour Apple Silicon et Intel ; elle n'a été essayée que sur macOS 27 avec Apple Silicon.
 
 1. Téléchargez **[Synchro.dmg](https://github.com/mdany75/Synchro/releases/latest/download/Synchro.dmg)**.
 2. Ouvrez-le et glissez **Synchro** sur le dossier **Applications**.
 3. Lancez Synchro, puis suivez la section « Autorisations » ci-dessous : le premier lancement est bloqué par macOS.
+
+## Utilisation
+
+1. Cliquez sur **Ajouter**, nommez la tâche, puis choisissez la source et la destination (bouton « Choisir… », glisser-déposer, ou crayon pour saisir une adresse `smb://`).
+2. Dans « Contenu de la source », marquez d'un ✕ ce qui ne doit pas être sauvegardé, puis cliquez sur **Enregistrer**.
+3. Cliquez sur **Synchroniser…** : l'analyse commence, rien n'est encore modifié.
+4. Lisez l'aperçu, en particulier la liste « À effacer », puis confirmez. S'il n'y a rien à faire, Synchro l'indique directement dans la fenêtre.
+5. À la fin, le résultat s'affiche et un journal est enregistré.
+
+Choisissez comme destination un **dossier réservé à ce miroir** : tout ce qui s'y trouve et n'existe pas dans la source sera effacé.
 
 ## Autorisations
 
@@ -43,12 +75,12 @@ Il faut macOS 14 ou plus récent (Apple Silicon ou Intel).
 
 Synchro n'est pas signée avec un certificat Apple payant. Au premier lancement, macOS affiche donc un message du type « Apple n'a pas pu vérifier que Synchro ne contient pas de logiciel malveillant ». Pour l'autoriser :
 
-1. Cliquez **Terminé** dans le message (pas « Placer dans la corbeille »).
+1. Cliquez sur **Terminé** dans le message (pas sur « Placer dans la corbeille »).
 2. Ouvrez **Réglages Système → Confidentialité et sécurité**.
-3. Descendez jusqu'à la section **Sécurité** : une ligne indique que Synchro a été bloquée. Cliquez **Ouvrir quand même**.
+3. Descendez jusqu'à la section **Sécurité** : une ligne indique que Synchro a été bloquée. Cliquez sur **Ouvrir quand même**.
 4. Confirmez avec votre mot de passe ou Touch ID, puis **Ouvrir**.
 
-C'est à faire une seule fois. Autre méthode, dans le Terminal :
+Autre méthode, dans le Terminal :
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Synchro.app
@@ -56,31 +88,52 @@ xattr -dr com.apple.quarantine /Applications/Synchro.app
 
 ### Accès aux disques et au réseau
 
-À la première utilisation, macOS demande d'autoriser Synchro à accéder aux **volumes amovibles** (le SSD) et aux **volumes réseau** (le NAS). Cliquez **Autoriser**.
+À la première utilisation, macOS demande d'autoriser Synchro à accéder aux **volumes amovibles** (le SSD) et aux **volumes réseau** (le NAS). Cliquez sur **Autoriser**. Une demande semblable apparaît si une tâche vise le Bureau, Documents ou Téléchargements.
 
-Si vous avez refusé par erreur, la source reste vide ou l'analyse échoue. Pour corriger : **Réglages Système → Confidentialité et sécurité → Fichiers et dossiers → Synchro**, puis activez « Volumes amovibles » et « Volumes réseau ».
+Si vous avez refusé par erreur, la liste de la source affiche « Accès refusé par macOS ». Pour corriger : **Réglages Système → Confidentialité et sécurité → Fichiers et dossiers → Synchro**, puis activez « Volumes amovibles » et « Volumes réseau ».
 
 ### Notifications
 
-Au premier lancement d'une synchronisation, macOS demande d'autoriser les notifications. Pour changer d'avis plus tard : **Réglages Système → Notifications → Synchro**. Sans cette autorisation, seul le son de fin est joué.
+Au premier lancement d'une analyse, macOS demande d'autoriser les notifications. Pour changer d'avis plus tard : **Réglages Système → Notifications → Synchro**. Sans cette autorisation, seul le son est joué.
 
 ### Mot de passe du NAS
 
-Synchro ne demande ni ne stocke le mot de passe. Connectez le partage une fois dans le Finder (**Aller → Se connecter au serveur…**, ⌘K) en cochant **Conserver ce mot de passe dans mon trousseau** ; Synchro pourra ensuite monter le partage toute seule.
+Synchro ne demande ni ne stocke le mot de passe. Connectez le partage une fois dans le Finder (**Aller → Se connecter au serveur…**, ⌘K) en cochant **Conserver ce mot de passe dans mon trousseau** ; Synchro pourra ensuite connecter le partage toute seule.
+
+### Après une mise à jour
+
+Chaque nouvelle version doit être autorisée de nouveau : refaites « Ouvrir quand même » et acceptez encore les demandes d'accès aux disques. Si la liste de la source reste vide alors que les interrupteurs sont activés dans les Réglages, désactivez-les puis réactivez-les.
+
+## Conseils
+
+- **Quittez Lightroom** avant de synchroniser son catalogue.
+- **Activez la corbeille réseau** de votre NAS (et les instantanés s'il en propose) : Synchro efface définitivement, c'est votre filet de sécurité.
+- **Arrêter puis relancer** une synchronisation reprend où elle en était ; seul le fichier en cours recommence.
+- Les tâches sont enregistrées dans `~/Library/Application Support/Synchro/presets.json`, les journaux dans le dossier `Journal` voisin (les 50 derniers sont gardés).
 
 ## Compiler soi-même
 
-Il faut les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est pas nécessaire.
+Il faut les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est pas nécessaire. Vérifié avec Swift 6.4 et le SDK macOS 27.
 
 ```bash
 git clone https://github.com/mdany75/Synchro.git
 cd Synchro
+./test.sh
 ./build.sh
-cp -R build/Synchro.app ~/Applications/
+mkdir -p ~/Applications && rm -rf ~/Applications/Synchro.app && cp -R build/Synchro.app ~/Applications/
 ```
 
-`./build.sh dmg` produit en plus `build/Synchro.dmg`.
+- `./test.sh` lance les tests du moteur de synchronisation sur des dossiers temporaires.
+- `./build.sh dmg` lance les tests puis produit aussi `build/Synchro.dmg`.
+
+Le binaire accepte un mode ligne de commande, pour examiner un plan sans interface :
+
+```bash
+build/Synchro.app/Contents/MacOS/Synchro --plan <source> <destination> [--exclude <chemin relatif>]…
+```
+
+Cette commande affiche le plan sans rien écrire. Avec `--run`, le plan est exécuté tout de suite, **sans aperçu ni demande de confirmation** (les suppressions sont définitives) ; `--confirmer` remplace la case à cocher exigée pour une situation inhabituelle. Dans ce mode, les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
 
 ## Avertissement
 
-Synchro **efface définitivement** de la destination ce qui n'est plus dans la source. Lisez l'aperçu avant de confirmer, et gardez une autre sauvegarde de ce qui compte.
+Synchro **efface définitivement** de la destination tout ce qui n'est pas dans la source. Lisez l'aperçu avant de confirmer, et gardez une autre sauvegarde de ce qui compte.

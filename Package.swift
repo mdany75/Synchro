@@ -5,6 +5,9 @@ let package = Package(
     name: "Synchro",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Synchro", path: "Sources/Synchro")
+        // Moteur de synchronisation, sans interface : c'est lui que couvrent les tests.
+        .target(name: "SynchroCore", path: "Sources/SynchroCore"),
+        .executableTarget(name: "Synchro", dependencies: ["SynchroCore"], path: "Sources/Synchro"),
+        .testTarget(name: "SynchroCoreTests", dependencies: ["SynchroCore"], path: "Tests/SynchroCoreTests"),
     ]
 )
