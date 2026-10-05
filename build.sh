@@ -1,21 +1,22 @@
 #!/bin/bash
-# Compile Synchro et assemble build/Synchro.app (aucun Xcode requis, seulement les Command Line Tools).
-# Avec l'argument « dmg », lance d'abord les tests puis produit aussi build/Synchro.dmg pour la distribution.
+# Compile Synchro, lance les tests, assemble build/Synchro.app et produit build/Synchro.dmg
+# (aucun Xcode requis, seulement les Command Line Tools).
+#   ./build.sh            tests, app et image disque
+#   ./build.sh --install  idem, puis installe l'app dans /Applications
+#   SKIP_TESTS=1          saute les tests ; ALLOW_DIRTY=1 tolère des modifications non validées dans git
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-1.1}"
+VERSION="${VERSION:-1.2}"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 ARCHS=(--arch arm64 --arch x86_64)   # binaire universel : Apple Silicon et Intel
 
-if [ "${1:-}" = "dmg" ]; then
-    # Une image publiée doit correspondre à un état enregistré du dépôt.
-    if [ -n "$(git status --porcelain 2>/dev/null)" ] && [ -z "${ALLOW_DIRTY:-}" ]; then
-        echo "Erreur : des modifications ne sont pas validées dans git (ALLOW_DIRTY=1 pour passer outre)." >&2
-        exit 1
-    fi
-    ./test.sh
+# Une image publiée doit correspondre à un état enregistré du dépôt.
+if [ -n "$(git status --porcelain 2>/dev/null)" ] && [ -z "${ALLOW_DIRTY:-}" ]; then
+    echo "Erreur : des modifications ne sont pas validées dans git (ALLOW_DIRTY=1 pour passer outre)." >&2
+    exit 1
 fi
+[ -n "${SKIP_TESTS:-}" ] || ./test.sh
 
 swift build -c release "${ARCHS[@]}" --product Synchro
 BIN="$(swift build -c release "${ARCHS[@]}" --show-bin-path)/Synchro"
@@ -69,8 +70,8 @@ codesign --force --sign - "$APP"
 codesign --verify --strict "$APP"
 echo "OK : $APP (version $VERSION, build $BUILD)"
 
-if [ "${1:-}" = "dmg" ]; then
-    STAGE="build/dmg"
+STAGE="build/dmg"
+{
     rm -rf "$STAGE"
     mkdir -p "$STAGE"
     trap 'rm -rf "$STAGE" build/dmg.log' EXIT
@@ -83,4 +84,10 @@ if [ "${1:-}" = "dmg" ]; then
         exit 1
     fi
     echo "OK : build/Synchro.dmg (version $VERSION, build $BUILD)"
+}
+
+if [ "${1:-}" = "--install" ]; then
+    rm -rf /Applications/Synchro.app
+    cp -R "$APP" /Applications/
+    echo "OK : installée dans /Applications"
 fi

@@ -63,7 +63,7 @@ Une synchronisation en miroir efface des fichiers : Synchro refuse ou fait confi
 - Les fichiers de service de Windows et des NAS (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, `@eaDir`…) ne sont ni copiés ni effacés, comme les fichiers système de macOS ; un élément masqué qui n'existe que sur la destination est laissé en place.
 - Le Mac ne se met pas en veille pendant l'analyse ni pendant la copie.
 
-## Installation
+## Installer
 
 Il faut macOS 14 ou plus récent. L'app est compilée pour Apple Silicon et Intel ; elle n'a été essayée que sur macOS 27 avec Apple Silicon.
 
@@ -123,20 +123,23 @@ Chaque nouvelle version doit être autorisée de nouveau : refaites « Ouvrir qu
 - **Arrêter puis relancer** une synchronisation reprend où elle en était ; seul le fichier en cours recommence.
 - Les tâches sont enregistrées dans `~/Library/Application Support/Synchro/presets.json`, les journaux dans le dossier `Journal` voisin (les 50 derniers sont gardés).
 
-## Compiler soi-même
+## Reconstruire
 
 Il faut les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est pas nécessaire. Vérifié avec Swift 6.4 et le SDK macOS 27.
 
 ```bash
-git clone https://github.com/mdany75/Synchro.git
-cd Synchro
-./test.sh
 ./build.sh
-mkdir -p ~/Applications && rm -rf ~/Applications/Synchro.app && cp -R build/Synchro.app ~/Applications/
 ```
 
-- `./test.sh` lance les tests sur des dossiers temporaires : ceux du moteur de synchronisation, puis ceux du déroulement d'une tâche dans l'app (analyse, aperçu, exécution, état enregistré).
-- `./build.sh dmg` lance les tests puis produit aussi `build/Synchro.dmg`.
+Lance les tests, compile l'app pour Apple Silicon et Intel, la signe (ad hoc) et produit `build/Synchro.app` et `build/Synchro.dmg`. `./build.sh --install` installe en plus l'app dans `/Applications`.
+
+## Tests
+
+```bash
+./test.sh
+```
+
+Tests du moteur de synchronisation, puis du déroulement d'une tâche dans l'app (analyse, aperçu, exécution, état enregistré). Ils travaillent uniquement sur des dossiers temporaires du Mac : jamais sur un disque branché, un partage réseau ni vos tâches enregistrées. `./build.sh` les lance aussi.
 
 Le binaire accepte un mode ligne de commande, pour examiner un plan sans interface :
 
@@ -145,6 +148,16 @@ build/Synchro.app/Contents/MacOS/Synchro --plan <source> <destination> [--exclud
 ```
 
 Cette commande affiche le plan sans rien écrire. Avec `--run`, le plan est exécuté tout de suite, **sans aperçu ni demande de confirmation** (les suppressions sont définitives) ; `--confirmer` remplace la case à cocher exigée pour une situation inhabituelle, et `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés. Dans ce mode, les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
+
+## Organisation
+
+- `Sources/SynchroCore/` : le moteur (analyse, plan, copie, garde-fous), sans interface.
+- `Sources/Synchro/` : l'app SwiftUI (fenêtre, tâches, journal, notifications) et le mode ligne de commande.
+- `Tests/` : tests du moteur et du déroulement d'une tâche.
+- `Resources/` : icône de l'app.
+- `scripts/` : outil qui dessine l'icône.
+- `docs/` : captures d'écran du README.
+- `build.sh`, `test.sh` : construction et tests ; tout ce qui est produit va dans `build/`, ignoré par git.
 
 ## Avertissement
 
