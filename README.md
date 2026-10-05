@@ -17,7 +17,8 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 - **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système de macOS (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) sont toujours ignorés.
 - **Destination SMB** : saisissez `smb://serveur/partage/dossier`. Le partage est monté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
 - **Glisser-déposer** d'un dossier ou d'un alias sur les champs Source et Destination.
-- **Modifications confirmées** : les changements d'une tâche ne sont gardés qu'après « Enregistrer ».
+- **Modifications confirmées** : les changements d'une tâche ne sont gardés qu'après « Enregistrer », et l'app avertit si vous quittez sans l'avoir fait.
+- **Notification et son** à la fin de chaque synchronisation.
 
 ## Comment ça marche
 

@@ -28,6 +28,8 @@ enum Phase {
 
 @MainActor
 final class AppModel: ObservableObject {
+    static let shared = AppModel()
+
     @Published var presets: [Preset] { didSet { save() } }
     /// Modifications en attente : un préréglage n'est réécrit qu'après « Enregistrer ».
     @Published var drafts: [UUID: Preset] = [:]
@@ -37,6 +39,9 @@ final class AppModel: ObservableObject {
     @Published var scanStatus = ""
     @Published var progress = SyncProgress()
     @Published var plan: SyncPlan?
+    @Published var treeCollapsed = UserDefaults.standard.bool(forKey: "treeCollapsed") {
+        didSet { UserDefaults.standard.set(treeCollapsed, forKey: "treeCollapsed") }
+    }
 
     private var roots: (src: URL, dst: URL)?
     private var task: Task<Void, Never>?
@@ -79,6 +84,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    var isRunning: Bool {
+        if case .running = phase { return true }
+        return false
+    }
+
     var isPreview: Bool {
         if case .preview = phase { return true }
         return false
@@ -95,6 +105,10 @@ final class AppModel: ObservableObject {
         guard let draft = drafts[id], let i = presets.firstIndex(where: { $0.id == id }) else { return }
         presets[i] = draft
         drafts[id] = nil
+    }
+
+    func saveAllDrafts() {
+        for id in Array(drafts.keys) { saveDraft(id) }
     }
 
     func revertDraft(_ id: UUID) {
@@ -186,6 +200,8 @@ final class AppModel: ObservableObject {
             options: [.userInitiated, .idleSystemSleepDisabled], reason: "Synchronisation en cours")
 
         let id = activePreset
+        let name = presets.first(where: { $0.id == id })?.name ?? "Synchro"
+        Notifier.shared.prepare()
         task = Task.detached { [weak self] in
             let result = SyncRunner.run(plan: plan, src: roots.src, dst: roots.dst) { p in
                 self?.onMain { self?.progress = p }
@@ -195,6 +211,13 @@ final class AppModel: ObservableObject {
                 self?.progress = result.progress
                 self?.plan = nil
                 self?.phase = .done(result)
+                if !result.cancelled {
+                    let p = result.progress
+                    Notifier.shared.finished(
+                        title: result.errors.isEmpty ? "Synchronisation terminée" : "Terminée avec \(result.errors.count) erreur(s)",
+                        body: "\(name) — \(p.copied.formatted()) copiés, \(p.deleted.formatted()) effacés · \(Fmt.duration(p.elapsed)) · \(Fmt.speed(result.averageSpeed))",
+                        success: result.errors.isEmpty)
+                }
                 if !result.cancelled, result.errors.isEmpty, let i = self?.presets.firstIndex(where: { $0.id == id }) {
                     self?.presets[i].lastSync = Date()
                 }

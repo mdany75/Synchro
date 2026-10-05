@@ -134,16 +134,32 @@ struct PresetDetail: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Contenu de la source").font(.headline)
-                    Text("Cliquez sur la flèche pour ignorer un élément").font(.caption).foregroundStyle(.secondary)
+                    Button { model.treeCollapsed.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: model.treeCollapsed ? "chevron.right" : "chevron.down")
+                                .font(.caption.weight(.semibold)).frame(width: 12)
+                            Text("Contenu de la source").font(.headline)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(model.treeCollapsed ? "Afficher le contenu de la source" : "Replier")
+                    Text(model.treeCollapsed
+                         ? (preset.excludes.isEmpty ? "Aucun élément ignoré" : "\(preset.excludes.count) élément(s) ignoré(s)")
+                         : "Cliquez sur la flèche pour ignorer un élément")
+                        .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Toggle("Ignorer les fichiers cachés", isOn: $preset.ignoreHidden)
                         .toggleStyle(.checkbox)
                 }
-                SourceTree(preset: $preset)
-                    .id(preset.source + "|\(preset.ignoreHidden)")
+                if !model.treeCollapsed {
+                    SourceTree(preset: $preset)
+                        .id(preset.source + "|\(preset.ignoreHidden)")
+                }
             }
             .disabled(locked)
+
+            if model.treeCollapsed { Spacer(minLength: 0) }
         }
         .padding(20)
     }

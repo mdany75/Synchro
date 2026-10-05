@@ -2,7 +2,8 @@ import SwiftUI
 
 @main
 struct SynchroApp: App {
-    @StateObject private var model = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var model = AppModel.shared
 
     init() {
         CLI.runIfRequested()
