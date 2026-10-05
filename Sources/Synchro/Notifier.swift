@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--snapshot"), args.count > i + 1 else { return }
         let target = URL(fileURLWithPath: args[i + 1])
+        if ProcessInfo.processInfo.environment["SYNCHRO_DEMO"] == "apropos" { About.show() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             for (n, window) in NSApp.windows.filter({ $0.contentView != nil && $0.frame.width > 200 }).enumerated() {
                 guard let view = window.contentView?.superview ?? window.contentView,

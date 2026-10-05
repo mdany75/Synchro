@@ -176,7 +176,7 @@ final class AppModel: ObservableObject {
             }
         }
 
-        if let demo = ProcessInfo.processInfo.environment["SYNCHRO_DEMO"] { showDemo(demo) }
+        if let demo = ProcessInfo.processInfo.environment["SYNCHRO_DEMO"], demo != "apropos" { showDemo(demo) }
     }
 
     /// Relit les tâches. Un fichier présent mais illisible n'est jamais écrasé sans qu'une copie en ait été gardée.

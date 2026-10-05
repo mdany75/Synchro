@@ -17,6 +17,9 @@ struct SynchroApp: App {
                 .frame(minWidth: 880, minHeight: 640)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("À propos de Synchro") { About.show() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Nouvelle tâche") { model.addPreset() }
                     .keyboardShortcut("n")
@@ -28,6 +31,15 @@ struct SynchroApp: App {
                 }
             }
         }
+    }
+}
+
+enum About {
+    /// Fenêtre « À propos » standard, avec la seule version (« Version 1.1 ») : le numéro de compilation
+    /// que macOS ajoute entre parenthèses n'apprend rien à l'utilisateur.
+    @MainActor static func show() {
+        NSApp.orderFrontStandardAboutPanel(options: [.version: ""])
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
