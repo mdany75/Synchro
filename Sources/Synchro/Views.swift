@@ -500,6 +500,7 @@ struct StatusView: View {
         case .deleting: return "Suppression — \(p.deleteItemsDone.formatted()) / \(p.deleteItemsTotal.formatted())"
         case .folders: return "Création des dossiers…"
         case .copying: return "Copie"
+        case .verifying: return "Vérification des dates…"
         case .finished: return "Finalisation…"
         }
     }

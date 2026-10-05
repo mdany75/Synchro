@@ -165,7 +165,7 @@ public struct SyncPlan: Sendable {
 }
 
 public enum SyncPhase: Sendable, Equatable {
-    case preparing, deleting, folders, copying, finished
+    case preparing, deleting, folders, copying, verifying, finished
 }
 
 public struct SyncProgress: Sendable {
@@ -695,6 +695,7 @@ public enum SyncRunner {
         var consecutive = 0
         var deletedItems: [String] = []
         var copiedFiles: [String] = []
+        var stamped: [(rel: String, date: Date)] = []
         var samples: [(t: Date, bytes: Int64)] = [(start, 0)]
         var lastReport = Date.distantPast
 
@@ -846,13 +847,14 @@ public enum SyncRunner {
             report()
             var fileBytes: Int64 = 0
             do {
-                try copyFile(from: src.appendingPathComponent(f.rel), to: dst.appendingPathComponent(f.rel)) { n in
+                let date = try copyFile(from: src.appendingPathComponent(f.rel), to: dst.appendingPathComponent(f.rel)) { n in
                     fileBytes += Int64(n)
                     prog.bytesDone += Int64(n)
                     report()
                 }
                 prog.copied += 1
                 copiedFiles.append(f.rel)
+                stamped.append((f.rel, date))
                 consecutive = 0
             } catch is CancellationError {
                 prog.bytesDone -= fileBytes
@@ -862,6 +864,26 @@ public enum SyncRunner {
                 prog.bytesDone -= fileBytes
                 prog.bytesSkipped += f.size
                 fail(f.rel, error)
+            }
+        }
+
+        // La date de modification est ce qui permettra de reconnaître ces fichiers comme à jour : on s'assure
+        // qu'elle a tenu. Un serveur de fichiers peut la réécrire quelques dizaines de secondes après la copie.
+        if abortReason == nil && !Task.isCancelled && !stamped.isEmpty {
+            prog.phase = .verifying
+            prog.current = ""
+            report(force: true)
+            for (rel, date) in stamped where abortReason == nil && !Task.isCancelled {
+                let path = dst.appendingPathComponent(rel).path
+                func drifted() -> Bool {
+                    guard let now = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date else { return false }
+                    return abs(now.timeIntervalSince(date)) > 2
+                }
+                guard drifted() else { continue }
+                try? fm.setAttributes([.modificationDate: date], ofItemAtPath: path)
+                if drifted() {
+                    fail(rel, SyncError("la destination ne conserve pas sa date de modification : il sera recopié à chaque synchronisation"))
+                }
             }
         }
 
@@ -881,7 +903,9 @@ public enum SyncRunner {
 
     /// Copie vers un fichier temporaire caché puis le met à la place de la cible, pour ne jamais laisser un fichier
     /// tronqué sous son vrai nom. La version précédente reste en place jusqu'à ce que la nouvelle soit complète.
-    static func copyFile(from: URL, to: URL, onBytes: (Int) -> Void) throws {
+    /// Renvoie la date de modification donnée à la copie.
+    @discardableResult
+    static func copyFile(from: URL, to: URL, onBytes: (Int) -> Void) throws -> Date {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         if fm.fileExists(atPath: to.path, isDirectory: &isDir), isDir.boolValue {
@@ -936,23 +960,26 @@ public enum SyncRunner {
 
             let created = date(before.st_birthtimespec), modified = date(before.st_mtimespec)
             copyFinderMetadata(from: from.path, to: tmp.path)
-            // Les dates en dernier : écrire d'autres attributs peut modifier la date côté serveur.
-            try? fm.setAttributes([.creationDate: created], ofItemAtPath: tmp.path)
-            try fm.setAttributes([.modificationDate: modified], ofItemAtPath: tmp.path)
-
             let landed = (try fm.attributesOfItem(atPath: tmp.path)[.size] as? NSNumber)?.int64Value
             guard landed == written else {
                 throw SyncError("la copie sur la destination est incomplète")
             }
             try replace(tmp: tmp, target: to)
 
-            // Certains volumes (exFAT avec étiquettes) perdent la date de création au renommage : on la repose au besoin.
-            if created <= modified,
-               let now = (try? fm.attributesOfItem(atPath: to.path))?[.creationDate] as? Date,
-               abs(now.timeIntervalSince(created)) > 2 {
-                try? fm.setAttributes([.creationDate: created], ofItemAtPath: to.path)
-                try? fm.setAttributes([.modificationDate: modified], ofItemAtPath: to.path)
+            // Les dates se posent en tout dernier, une fois le fichier sous son vrai nom. Sur un partage réseau,
+            // le client ne ferme réellement le fichier qu'au renommage (ou bien plus tard), et le serveur réécrit
+            // alors la date de modification : posée avant, elle serait perdue, et le fichier recopié à chaque fois.
+            if created <= modified { try? fm.setAttributes([.creationDate: created], ofItemAtPath: to.path) }
+            do {
+                try fm.setAttributes([.modificationDate: modified], ofItemAtPath: to.path)
+                let kept = (try fm.attributesOfItem(atPath: to.path))[.modificationDate] as? Date
+                guard let kept, abs(kept.timeIntervalSince(modified)) <= 2 else {
+                    throw SyncError("date refusée")
+                }
+            } catch {
+                throw SyncError("copié, mais la destination n'a pas accepté sa date de modification : il sera recopié à la prochaine synchronisation")
             }
+            return modified
         } catch {
             try? fm.removeItem(at: tmp)
             throw error
