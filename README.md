@@ -57,7 +57,7 @@ Une synchronisation en miroir efface des fichiers : Synchro refuse ou fait confi
 - Les noms accentués sont comparés sous forme Unicode normalisée, pour qu'un « é » du Mac et un « é » du NAS soient reconnus comme identiques.
 - Si seules les majuscules d'un nom changent (« Islande » devient « islande »), l'élément est renommé sur la destination sans être recopié. Tout autre renommage ou déplacement d'un dossier le fait effacer puis recopier en entier.
 - Quand un dossier disparaît de la source, les fichiers cachés qu'il contenait sur la destination disparaissent avec lui ; seuls les éléments que vous avez marqués ✕ le font conserver.
-- Les fichiers de service que le NAS ou Windows déposent sur la destination (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, éléments masqués…) sont laissés en place.
+- Les fichiers de service de Windows et des NAS (`Thumbs.db`, `desktop.ini`, `$RECYCLE.BIN`, `@eaDir`…) ne sont ni copiés ni effacés, comme les fichiers système de macOS ; un élément masqué qui n'existe que sur la destination est laissé en place.
 - Le Mac ne se met pas en veille pendant l'analyse ni pendant la copie.
 
 ## Installation

@@ -25,7 +25,9 @@ public struct PlanOptions: Sendable {
         case none
         /// Début de l'analyse de la dernière synchronisation réussie.
         case date(Date)
-        /// À défaut d'historique : la date à laquelle la copie de destination a été écrite.
+        /// À défaut d'historique : la date à laquelle la copie de destination a été écrite. Fiable entre deux
+        /// volumes locaux seulement : un serveur réseau ne date pas ses fichiers de façon comparable, et presque
+        /// tous les fichiers passeraient pour touchés.
         case destinationCopy
     }
 

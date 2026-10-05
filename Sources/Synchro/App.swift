@@ -36,6 +36,8 @@ struct SynchroApp: App {
 /// `--plan` seul n'écrit rien. `--run` exécute le plan aussitôt, sans aperçu à confirmer, avec les garde-fous
 /// du moteur ; `--confirmer` tient lieu de la case à cocher exigée pour une situation inhabituelle.
 /// `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés.
+/// `--repere-copie` compare aussi ceux qui ont été touchés après l'écriture de leur copie de destination ;
+/// à réserver aux destinations locales : un NAS ne date pas ses copies de façon comparable, et tout y passerait.
 /// Les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
 enum CLI {
     static func runIfRequested() {
@@ -62,8 +64,8 @@ enum CLI {
             let d = dstExists
                 ? try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: true, flagHides: false) { _ in }
                 : ScanResult()
-            // Sans historique, le repère est la date à laquelle chaque copie de destination a été écrite.
-            var options = PlanOptions(reference: .destinationCopy, verifyAll: args.contains("--comparer-tout"))
+            var options = PlanOptions(reference: args.contains("--repere-copie") ? .destinationCopy : .none,
+                                      verifyAll: args.contains("--comparer-tout"))
             options.caseInsensitive = RootCheck.isCaseInsensitive(
                 at: dst, samples: d.entries.values.lazy.filter { !$0.isDir }.prefix(50).map(\.rel))
             var plan = Scanner.plan(source: s, destination: d, options: options)
