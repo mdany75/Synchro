@@ -31,7 +31,46 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 
 ## Installation
 
-Il faut macOS 14 ou plus récent et les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est pas nécessaire.
+Il faut macOS 14 ou plus récent (Apple Silicon ou Intel).
+
+1. Téléchargez **[Synchro.dmg](https://github.com/mdany75/Synchro/releases/latest/download/Synchro.dmg)**.
+2. Ouvrez-le et glissez **Synchro** sur le dossier **Applications**.
+3. Lancez Synchro, puis suivez la section « Autorisations » ci-dessous : le premier lancement est bloqué par macOS.
+
+## Autorisations
+
+### Premier lancement : « Ouvrir quand même »
+
+Synchro n'est pas signée avec un certificat Apple payant. Au premier lancement, macOS affiche donc un message du type « Apple n'a pas pu vérifier que Synchro ne contient pas de logiciel malveillant ». Pour l'autoriser :
+
+1. Cliquez **Terminé** dans le message (pas « Placer dans la corbeille »).
+2. Ouvrez **Réglages Système → Confidentialité et sécurité**.
+3. Descendez jusqu'à la section **Sécurité** : une ligne indique que Synchro a été bloquée. Cliquez **Ouvrir quand même**.
+4. Confirmez avec votre mot de passe ou Touch ID, puis **Ouvrir**.
+
+C'est à faire une seule fois. Autre méthode, dans le Terminal :
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Synchro.app
+```
+
+### Accès aux disques et au réseau
+
+À la première utilisation, macOS demande d'autoriser Synchro à accéder aux **volumes amovibles** (le SSD) et aux **volumes réseau** (le NAS). Cliquez **Autoriser**.
+
+Si vous avez refusé par erreur, la source reste vide ou l'analyse échoue. Pour corriger : **Réglages Système → Confidentialité et sécurité → Fichiers et dossiers → Synchro**, puis activez « Volumes amovibles » et « Volumes réseau ».
+
+### Notifications
+
+Au premier lancement d'une synchronisation, macOS demande d'autoriser les notifications. Pour changer d'avis plus tard : **Réglages Système → Notifications → Synchro**. Sans cette autorisation, seul le son de fin est joué.
+
+### Mot de passe du NAS
+
+Synchro ne demande ni ne stocke le mot de passe. Connectez le partage une fois dans le Finder (**Aller → Se connecter au serveur…**, ⌘K) en cochant **Conserver ce mot de passe dans mon trousseau** ; Synchro pourra ensuite monter le partage toute seule.
+
+## Compiler soi-même
+
+Il faut les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est pas nécessaire.
 
 ```bash
 git clone https://github.com/mdany75/Synchro.git
@@ -40,7 +79,7 @@ cd Synchro
 cp -R build/Synchro.app ~/Applications/
 ```
 
-Au premier lancement, macOS demande l'autorisation d'accéder aux volumes amovibles et réseau.
+`./build.sh dmg` produit en plus `build/Synchro.dmg`.
 
 ## Avertissement
 

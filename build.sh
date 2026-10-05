@@ -1,9 +1,11 @@
 #!/bin/bash
 # Compile Synchro et assemble Synchro.app (aucun Xcode requis, seulement les Command Line Tools).
+# Avec l'argument « dmg », produit aussi build/Synchro.dmg pour la distribution.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
+# Binaire universel : Apple Silicon et Intel.
+swift build -c release --arch arm64 --arch x86_64
 APP="build/Synchro.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -36,3 +38,14 @@ EOF
 
 codesign --force --sign - "$APP"
 echo "OK : $APP"
+
+if [ "${1:-}" = "dmg" ]; then
+    STAGE="build/dmg"
+    rm -rf "$STAGE" build/Synchro.dmg
+    mkdir -p "$STAGE"
+    cp -R "$APP" "$STAGE/"
+    ln -s /Applications "$STAGE/Applications"
+    hdiutil create -volname "Synchro" -srcfolder "$STAGE" -ov -format UDZO build/Synchro.dmg >/dev/null
+    rm -rf "$STAGE"
+    echo "OK : build/Synchro.dmg"
+fi
