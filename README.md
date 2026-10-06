@@ -24,6 +24,7 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 - **Modifications confirmées** : les changements d'une tâche ne sont gardés qu'après « Enregistrer », et l'app avertit si vous quittez sans l'avoir fait.
 - **Notification et son** à la fin de la synchronisation, et quand une analyse longue ou faite en arrière-plan attend votre confirmation.
 - **Journal** : chaque synchronisation laisse un fichier texte avec le plan complet (tout ce qui devait être copié ou effacé), le résultat et les erreurs ; si elle a été interrompue, il précise ce qui a réellement été fait (menu Fichier → Afficher les journaux). Une tentative qui s'est mal terminée reste signalée dans la liste des tâches jusqu'à la prochaine réussite.
+- **Exporter et importer les tâches** (menu Fichier) : un fichier JSON avec la source, la destination et les éléments ignorés de chaque tâche, pour les reprendre sur un autre Mac.
 - **Comparaison du contenu à la demande** : la flèche du bouton « Synchroniser… » propose de comparer aussi le contenu de tous les fichiers qui paraissent inchangés. C'est lent, mais c'est le moyen de vérifier une sauvegarde de fond en comble.
 
 ## Garde-fous

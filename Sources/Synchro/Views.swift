@@ -79,6 +79,12 @@ struct ContentView: View {
         } message: {
             Text("La tâche sera retirée de l'app. Aucun fichier n'est touché, ni sur la source ni sur la destination.")
         }
+        .alert("Tâches",
+               isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
+            Button("OK") {}
+        } message: {
+            Text(model.notice ?? "")
+        }
         .alert("Problème avec les tâches enregistrées",
                isPresented: Binding(get: { model.storeAlert != nil }, set: { if !$0 { model.storeAlert = nil } })) {
             Button("OK") {}

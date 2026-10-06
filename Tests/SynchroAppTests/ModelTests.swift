@@ -290,3 +290,30 @@ struct ModelTests {
         #expect(try bench.fm.contentsOfDirectory(atPath: store.path).contains { $0.hasPrefix("presets.illisible") })
     }
 }
+
+@MainActor
+@Suite(.serialized)
+struct ImportExportTests {
+    @Test func exporterPuisImporter() throws {
+        let bench = try Bench()
+        bench.model.presets[0].excludes = ["Rejets"]
+        bench.model.presets[0].lastSync = Date()
+        let file = bench.root.appendingPathComponent("taches.json")
+        try bench.model.exportPresets(to: file)
+
+        // Réimporter le même fichier n'ajoute rien ; une tâche différente est ajoutée sans son historique.
+        #expect(try bench.model.importPresets(from: file) == 0)
+        var other = try #require(try JSONDecoder().decode([Preset].self, from: Data(contentsOf: file)).first)
+        #expect(other.lastSync == nil && other.excludes == ["Rejets"])
+        other.name = "Vidéos"
+        other.destination = "/ailleurs"
+        try JSONEncoder().encode([other]).write(to: file)
+        #expect(try bench.model.importPresets(from: file) == 1)
+        #expect(bench.model.presets.map(\.name) == ["Essai", "Vidéos (importée)"])
+        #expect(bench.model.presets[1].id != bench.model.presets[0].id)
+        #expect(bench.model.selection == bench.model.presets[1].id)
+
+        try Data("pas du JSON".utf8).write(to: file)
+        #expect(throws: SyncError.self) { try bench.model.importPresets(from: file) }
+    }
+}

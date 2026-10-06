@@ -1,5 +1,9 @@
 # Changements
 
+## 1.3 — 2026-10-05
+### Ajouté
+- Menu Fichier → « Exporter les tâches… » et « Importer des tâches… » : les tâches (source, destination, éléments ignorés) s'échangent dans un fichier JSON, par exemple pour les reprendre sur un autre Mac. Une tâche déjà présente à l'identique n'est pas ajoutée deux fois.
+
 ## 1.2 — 2026-10-05
 ### Ajouté
 - Flèche jaune, avec le nombre d'éléments ignorés, sur un dossier synchronisé dont une partie du contenu est ignorée.

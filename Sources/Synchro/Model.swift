@@ -130,6 +130,8 @@ final class AppModel: ObservableObject {
     @Published var treeToken = 0
     /// Message à présenter une fois (tâches illisibles, enregistrement impossible).
     @Published var storeAlert: String?
+    /// Simple information à montrer une fois (import, export).
+    @Published var notice: String?
     @Published var treeCollapsed = UserDefaults.standard.bool(forKey: "treeCollapsed") {
         didSet { UserDefaults.standard.set(treeCollapsed, forKey: "treeCollapsed") }
     }
@@ -334,6 +336,35 @@ final class AppModel: ObservableObject {
         p.name += " (copie)"
         presets.append(p)
         selection = p.id
+    }
+
+    /// Écrit les tâches dans un fichier, sans l'état des synchronisations (dates, volumes), qui ne vaut que pour ce Mac.
+    func exportPresets(to url: URL) throws {
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let exported = presets.map { (drafts[$0.id] ?? $0).withRunState(of: nil) }
+        try enc.encode(exported).write(to: url, options: .atomic)
+    }
+
+    /// Ajoute les tâches d'un fichier. Une tâche déjà présente à l'identique est passée ; une tâche qui porte
+    /// l'identifiant d'une tâche existante mais diffère est ajoutée comme une copie. Renvoie le nombre de tâches ajoutées.
+    func importPresets(from url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        guard let items = try? JSONDecoder().decode([Lossy<Preset>].self, from: data) else {
+            throw SyncError("Ce fichier ne contient pas de tâches Synchro.")
+        }
+        var added = 0
+        for var p in items.compactMap(\.value).map({ $0.withRunState(of: nil) }) {
+            if let existing = presets.first(where: { $0.id == p.id }) {
+                if existing.sameSettings(as: p) { continue }
+                p.id = UUID()
+                p.name += " (importée)"
+            }
+            presets.append(p)
+            added += 1
+        }
+        if added > 0 { selection = presets.last?.id }
+        return added
     }
 
     func remove(_ id: UUID) {

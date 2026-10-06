@@ -1,5 +1,6 @@
 import SwiftUI
 import SynchroCore
+import UniformTypeIdentifiers
 
 @main
 struct SynchroApp: App {
@@ -25,11 +26,50 @@ struct SynchroApp: App {
                     .keyboardShortcut("n")
             }
             CommandGroup(after: .newItem) {
+                Divider()
+                Button("Importer des tâches…") { TaskFiles.importPresets(into: model) }
+                Button("Exporter les tâches…") { TaskFiles.exportPresets(from: model) }
+                    .disabled(model.presets.isEmpty)
+                Divider()
                 Button("Afficher les journaux") {
                     try? FileManager.default.createDirectory(at: Journal.folder, withIntermediateDirectories: true)
                     NSWorkspace.shared.open(Journal.folder)
                 }
             }
+        }
+    }
+}
+
+/// Import et export des tâches dans un fichier JSON (menu Fichier).
+enum TaskFiles {
+    @MainActor static func exportPresets(from model: AppModel) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Tâches Synchro.json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.prompt = "Exporter"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try model.exportPresets(to: url)
+            model.notice = "\(Fmt.count(model.presets.count, "tâche exportée", "tâches exportées")) dans « \(url.lastPathComponent) ». Les éléments ignorés sont inclus ; les dates de dernière synchro ne le sont pas."
+        } catch {
+            model.notice = "Export impossible : \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor static func importPresets(into model: AppModel) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.canChooseDirectories = false
+        panel.prompt = "Importer"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let added = try model.importPresets(from: url)
+            model.notice = added == 0
+                ? "Aucune nouvelle tâche : celles du fichier existent déjà."
+                : "\(Fmt.count(added, "tâche ajoutée", "tâches ajoutées")). Vérifiez la source et la destination avant de synchroniser."
+        } catch {
+            model.notice = "Import impossible : \(error.localizedDescription)"
         }
     }
 }
