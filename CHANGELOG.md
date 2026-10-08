@@ -1,5 +1,9 @@
 # Changements
 
+## 1.4 — 2026-10-08
+### Modifié
+- Application signée avec un certificat Apple Developer ID et image disque notarisée par Apple : plus de « Ouvrir quand même » au premier lancement, et les autorisations d'accès aux disques sont conservées d'une version à l'autre.
+
 ## 1.3 — 2026-10-05
 ### Ajouté
 - Menu Fichier → « Exporter les tâches… » et « Importer des tâches… » : les tâches (source, destination, éléments ignorés) s'échangent dans un fichier JSON, par exemple pour les reprendre sur un autre Mac. Une tâche déjà présente à l'identique n'est pas ajoutée deux fois.

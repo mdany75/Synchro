@@ -84,20 +84,9 @@ Choisissez comme destination un **dossier réservé à ce miroir** : tout ce qui
 
 ## Autorisations
 
-### Premier lancement : « Ouvrir quand même »
+### Premier lancement
 
-Synchro n'est pas signée avec un certificat Apple payant. Au premier lancement, macOS affiche donc un message du type « Apple n'a pas pu vérifier que Synchro ne contient pas de logiciel malveillant ». Pour l'autoriser :
-
-1. Cliquez sur **Terminé** dans le message (pas sur « Placer dans la corbeille »).
-2. Ouvrez **Réglages Système → Confidentialité et sécurité**.
-3. Descendez jusqu'à la section **Sécurité** : une ligne indique que Synchro a été bloquée. Cliquez sur **Ouvrir quand même**.
-4. Confirmez avec votre mot de passe ou Touch ID, puis **Ouvrir**.
-
-Autre méthode, dans le Terminal :
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Synchro.app
-```
+Synchro est signée avec un certificat Apple Developer ID et notarisée par Apple : elle s'ouvre sans avertissement. Si macOS affiche quand même « Apple n'a pas pu vérifier que Synchro ne contient pas de logiciel malveillant », c'est une version reconstruite sans certificat : cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, puis, dans la section **Sécurité**, cliquez sur **Ouvrir quand même**.
 
 ### Accès aux disques et au réseau
 
@@ -132,7 +121,9 @@ Il faut les Command Line Tools d'Apple (`xcode-select --install`). Xcode n'est p
 ./build.sh
 ```
 
-Lance les tests, compile l'app pour Apple Silicon et Intel, la signe (ad hoc) et produit `build/Synchro.app` et `build/Synchro.dmg`. `./build.sh --install` installe en plus l'app dans `/Applications`.
+Lance les tests, compile l'app pour Apple Silicon et Intel, la signe et produit `build/Synchro.app` et `build/Synchro.dmg`. `./build.sh --install` installe en plus l'app dans `/Applications`.
+
+Avec le certificat « Developer ID Application » dans le trousseau et le profil `notarisation` de `notarytool`, l'app est signée avec le runtime durci et l'image disque est notarisée chez Apple (quelques minutes) puis agrafée ; sans certificat, la signature est ad hoc et le script le dit. `SKIP_NOTARIZE=1 ./build.sh` saute la notarisation pour un essai rapide.
 
 ## Tests
 

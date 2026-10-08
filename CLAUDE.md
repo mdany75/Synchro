@@ -21,7 +21,7 @@ Dans cet ordre :
 
 1. Mettre le numéro à jour (`VERSION=` dans `build.sh`) et ajouter la section `## X.Y — date` dans `CHANGELOG.md`.
 2. `git add -A && git commit -m "Version X.Y" && git push origin main`
-3. `./build.sh` (produit `build/Synchro.dmg` ; refuse un dépôt non validé)
+3. `./build.sh` (produit `build/Synchro.dmg`, signé Developer ID et notarisé : attend la réponse d'Apple, quelques minutes ; refuse un dépôt non validé)
 4. `git tag -a vX.Y -m "Version X.Y" && git push origin vX.Y`
 5. `gh release create vX.Y build/Synchro.dmg --title "Synchro X.Y" --notes "$(~/.claude/skills/standard-projet/scripts/notes-version.sh X.Y)"`
 
@@ -35,6 +35,7 @@ Le README pointe vers `releases/latest/download/Synchro.dmg`.
 - Pas de Xcode sur ce Mac, seulement les Command Line Tools : `@State` et `@Test` sont des macros dont le module manque. Les vues utilisent `@Local` (Views.swift) à la place de `@State`, et `test.sh` passe `-plugin-path` pour les tests. Ne pas réintroduire `@State`.
 - Sur un partage réseau, poser les dates d'un fichier après sa mise en place sous son vrai nom, jamais sur le fichier temporaire (le serveur les réécrit à la fermeture réelle).
 - L'`Info.plist` est écrit par `build.sh` ; le numéro de version y est `VERSION=`.
+- `build.sh` signe avec le certificat « Developer ID Application » de Dany (trousseau) et notarise l'image disque (profil `notarisation` de `notarytool`) ; sans certificat, signature ad hoc. `SKIP_NOTARIZE=1` pour un essai rapide ; ne jamais publier une image non notarisée.
 - Toute modification du moteur (`Sources/SynchroCore`) passe par `./test.sh` ; une correction de perte de données possible a son test de régression.
 - Avant de pousser une fonctionnalité : README et CHANGELOG à jour, capture d'écran (`docs/capture.png`) refaite si l'interface a changé, et une nouvelle version si ce qu'on installe a changé.
 - Pousser sur `main` directement.
