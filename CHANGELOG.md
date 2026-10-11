@@ -42,6 +42,3 @@
 - Un dossier ignoré présent seulement sur la destination était effacé avec son dossier parent.
 - Des photos de même taille et de même seconde, renumérotées après un tri, passaient pour inchangées.
 - Quitter pendant une synchronisation bloquait l'app.
-
-## 1.0 — 2026-10-04
-Première version publiée.
