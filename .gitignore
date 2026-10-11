@@ -47,5 +47,8 @@ desktop.ini
 *.log
 *.tmp
 
+# Récapitulatifs du mod relais de Claude Code (peuvent contenir des infos du projet)
+.relais/
+
 # Dépôt git tenu hors de la synchronisation iCloud (ancienne astuce)
 .git.nosync/
