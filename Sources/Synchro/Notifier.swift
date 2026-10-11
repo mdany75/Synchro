@@ -39,7 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// puis quitte. Le rendu se fait hors écran, donc aussi quand la session est verrouillée.
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
-        guard let i = args.firstIndex(of: "--snapshot"), args.count > i + 1 else { return }
+        guard let i = args.firstIndex(of: "--snapshot"), args.count > i + 1 else {
+            // Ni pendant une capture de documentation, ni dans un état de démonstration.
+            if ProcessInfo.processInfo.environment["SYNCHRO_DEMO"] == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    MainActor.assumeIsolated { Updater.shared.checkAtLaunch() }
+                }
+            }
+            return
+        }
         let target = URL(fileURLWithPath: args[i + 1])
         if ProcessInfo.processInfo.environment["SYNCHRO_DEMO"] == "apropos" { About.show() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {

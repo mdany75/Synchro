@@ -181,12 +181,19 @@ public struct SyncProgress: Sendable {
     public var deleteItemsDone = 0
     public var deleteItemsTotal = 0
     public var current = ""
+    /// Rang (à partir de 1) du fichier en cours de copie, et nombre de fichiers à copier.
+    public var fileIndex = 0
+    public var filesTotal = 0
+    /// Vitesse moyenne depuis le début de la copie : stable, donc un temps restant qui ne saute pas.
     public var speed: Double = 0
     public var elapsed: TimeInterval = 0
+    /// Temps passé dans la phase de copie (les suppressions ne comptent pas dans la vitesse).
+    public var copyElapsed: TimeInterval = 0
     public var startedAt = Date()
 
-    public init(bytesTotal: Int64 = 0, deleteItemsTotal: Int = 0, startedAt: Date = Date()) {
+    public init(bytesTotal: Int64 = 0, filesTotal: Int = 0, deleteItemsTotal: Int = 0, startedAt: Date = Date()) {
         self.bytesTotal = bytesTotal
+        self.filesTotal = filesTotal
         self.deleteItemsTotal = deleteItemsTotal
         self.startedAt = startedAt
     }
@@ -225,7 +232,7 @@ public struct SyncResult: Sendable {
         self.finishedAt = finishedAt
     }
 
-    public var averageSpeed: Double { progress.elapsed > 0 ? Double(progress.bytesDone) / progress.elapsed : 0 }
+    public var averageSpeed: Double { progress.copyElapsed > 0 ? Double(progress.bytesDone) / progress.copyElapsed : 0 }
     public var succeeded: Bool { !cancelled && abortReason == nil && errors.isEmpty }
 
     /// Résultat d'une synchronisation refusée avant d'avoir commencé.
@@ -689,25 +696,28 @@ public enum SyncRunner {
         let fm = FileManager.default
         let src = roots.src, dst = roots.dst
         let start = Date()
-        var prog = SyncProgress(bytesTotal: plan.bytesToCopy, deleteItemsTotal: plan.deletes.count, startedAt: start)
+        var prog = SyncProgress(bytesTotal: plan.bytesToCopy, filesTotal: plan.copies.count,
+                                deleteItemsTotal: plan.deletes.count, startedAt: start)
         var errors: [String] = []
         var abortReason: String?
         var consecutive = 0
         var deletedItems: [String] = []
         var copiedFiles: [String] = []
         var stamped: [(rel: String, date: Date)] = []
-        var samples: [(t: Date, bytes: Int64)] = [(start, 0)]
+        var copyStart: Date?
         var lastReport = Date.distantPast
 
         func report(force: Bool = false) {
             let now = Date()
             guard force || now.timeIntervalSince(lastReport) > 0.15 else { return }
             lastReport = now
-            samples.append((now, prog.bytesDone))
-            while samples.count > 2, now.timeIntervalSince(samples[0].t) > 5 { samples.removeFirst() }
-            let dt = now.timeIntervalSince(samples[0].t)
-            prog.speed = dt > 0.3 ? max(0, Double(prog.bytesDone - samples[0].bytes) / dt) : prog.speed
             prog.elapsed = now.timeIntervalSince(start)
+            if let copyStart {
+                // Moyenne depuis le début de la copie, pas sur les dernières secondes : une vitesse qui saute
+                // à chaque fichier rend le temps restant illisible.
+                prog.copyElapsed = now.timeIntervalSince(copyStart)
+                prog.speed = prog.copyElapsed >= 1 ? Double(prog.bytesDone) / prog.copyElapsed : 0
+            }
             onProgress(prog)
         }
 
@@ -842,9 +852,12 @@ public enum SyncRunner {
         }
 
         prog.phase = .copying
+        copyStart = Date()
         for f in plan.copies where abortReason == nil && !Task.isCancelled {
             prog.current = f.rel
-            report()
+            prog.fileIndex += 1
+            // Le premier passe tout de suite : l'étape « Copie — fichier 1 sur N » s'affiche sans attendre.
+            report(force: prog.fileIndex == 1)
             var fileBytes: Int64 = 0
             do {
                 let date = try copyFile(from: src.appendingPathComponent(f.rel), to: dst.appendingPathComponent(f.rel)) { n in
@@ -869,6 +882,8 @@ public enum SyncRunner {
 
         // La date de modification est ce qui permettra de reconnaître ces fichiers comme à jour : on s'assure
         // qu'elle a tenu. Un serveur de fichiers peut la réécrire quelques dizaines de secondes après la copie.
+        if let started = copyStart { prog.copyElapsed = Date().timeIntervalSince(started) }
+        copyStart = nil
         if abortReason == nil && !Task.isCancelled && !stamped.isEmpty {
             prog.phase = .verifying
             prog.current = ""

@@ -20,6 +20,7 @@ struct SynchroApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("À propos de Synchro") { About.show() }
+                Button("Rechercher une mise à jour…") { Updater.shared.check(manual: true) }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Nouvelle tâche") { model.addPreset() }

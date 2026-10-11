@@ -16,7 +16,7 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 
 - **Tâches** : chaque tâche garde sa source, sa destination et ses éléments ignorés. Ajoutez-en autant que voulu. Au premier lancement, une tâche d'exemple est proposée : remplacez sa source et sa destination par les vôtres.
 - **Aperçu avant d'agir** : Synchro analyse d'abord, puis liste ce qui sera effacé (par dossier, avec le nombre de fichiers et la taille) et ce qui sera copié. Rien n'est modifié sans confirmation.
-- **Suivi en direct** : étape en cours, durée, temps restant, vitesse de transfert, volume transféré, nombre de fichiers copiés, effacés, inchangés et en échec.
+- **Suivi en direct** : étape en cours, fichier en cours (« fichier 1 479 sur 2 381 » et son nom), durée, temps restant, vitesse moyenne depuis le début de la copie, volume transféré, nombre de fichiers copiés, effacés, inchangés et en échec.
 - **Éléments ignorés** : dans l'arborescence de la source, cliquez sur la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est ni copié, ni effacé de la destination, même si son dossier parent disparaît de la source. Un dossier qui reste synchronisé mais contient des éléments ignorés porte une flèche jaune et leur nombre. Le lien « N éléments ignorés » en donne la liste complète.
 - **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) ne sont jamais copiés.
 - **Destination SMB** : `smb://serveur/partage/dossier`. Le partage est connecté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
@@ -26,6 +26,7 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 - **Journal** : chaque synchronisation laisse un fichier texte avec le plan complet (tout ce qui devait être copié ou effacé), le résultat et les erreurs ; si elle a été interrompue, il précise ce qui a réellement été fait (menu Fichier → Afficher les journaux). Une tentative qui s'est mal terminée reste signalée dans la liste des tâches jusqu'à la prochaine réussite.
 - **Exporter et importer les tâches** (menu Fichier) : un fichier JSON avec la source, la destination et les éléments ignorés de chaque tâche, pour les reprendre sur un autre Mac.
 - **Comparaison du contenu à la demande** : la flèche du bouton « Synchroniser… » propose de comparer aussi le contenu de tous les fichiers qui paraissent inchangés. C'est lent, mais c'est le moyen de vérifier une sauvegarde de fond en comble.
+- **Mises à jour** : au lancement, au plus une fois par jour, Synchro vérifie si une version plus récente est publiée ici et propose de l'installer en un clic (voir « Mises à jour » plus bas).
 
 ## Garde-fous
 
@@ -70,7 +71,7 @@ Il faut macOS 14 ou plus récent. L'app est compilée pour Apple Silicon et Inte
 
 1. Téléchargez **[Synchro.dmg](https://github.com/mdany75/Synchro/releases/latest/download/Synchro.dmg)**.
 2. Ouvrez-le et glissez **Synchro** sur le dossier **Applications**.
-3. Lancez Synchro, puis suivez la section « Autorisations » ci-dessous : le premier lancement est bloqué par macOS.
+3. Lancez Synchro et acceptez les demandes d'accès aux disques (section « Autorisations » ci-dessous).
 
 ## Utilisation
 
@@ -86,7 +87,7 @@ Choisissez comme destination un **dossier réservé à ce miroir** : tout ce qui
 
 ### Premier lancement
 
-Synchro est signée avec un certificat Apple Developer ID et notarisée par Apple : elle s'ouvre sans avertissement. Si macOS affiche quand même « Apple n'a pas pu vérifier que Synchro ne contient pas de logiciel malveillant », c'est une version reconstruite sans certificat : cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, puis, dans la section **Sécurité**, cliquez sur **Ouvrir quand même**.
+Synchro est signée avec un certificat Apple Developer ID et notarisée par Apple : elle s'ouvre sans avertissement, dès le premier lancement.
 
 ### Accès aux disques et au réseau
 
@@ -104,7 +105,19 @@ Synchro ne demande ni ne stocke le mot de passe. Connectez le partage une fois d
 
 ### Après une mise à jour
 
-Chaque nouvelle version doit être autorisée de nouveau : refaites « Ouvrir quand même » et acceptez encore les demandes d'accès aux disques. Si la liste de la source reste vide alors que les interrupteurs sont activés dans les Réglages, désactivez-les puis réactivez-les.
+Les autorisations accordées (accès aux disques, notifications) sont conservées d'une version à l'autre. Si la liste de la source reste quand même vide alors que les interrupteurs sont activés dans les Réglages, désactivez-les puis réactivez-les.
+
+## Mises à jour
+
+Au lancement, au plus une fois par jour, Synchro demande à GitHub quelle est la dernière version publiée : une seule requête, qui ne transmet rien sur vous ni sur vos fichiers. Pour vérifier tout de suite : menu **Synchro → Rechercher une mise à jour…**
+
+Si une version plus récente existe, une fenêtre présente ses nouveautés et propose trois choix :
+
+- **Installer et relancer** : l'image disque est téléchargée, la signature de la nouvelle app est contrôlée (elle doit porter l'identifiant de Synchro et le même certificat Apple Developer ID que l'app en place), l'app est remplacée dans son dossier, puis Synchro se ferme et se rouvre. Si quelque chose cloche, l'app en place n'est pas touchée et le message l'explique.
+- **Plus tard** : la proposition reviendra le lendemain.
+- **Voir sur GitHub** : ouvre la page de la version.
+
+Rien n'est jamais installé sans ce clic, et jamais pendant une synchronisation. Si Synchro ne peut pas se remplacer elle-même (dossier sans droit d'écriture, app lancée depuis l'image disque), elle propose de télécharger l'image disque pour l'installer à la main.
 
 ## Conseils
 

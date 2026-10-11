@@ -1074,3 +1074,24 @@ private func mirrorIsExact(_ box: Sandbox) throws -> Bool {
     try data.write(to: b)
     #expect(Scanner.sameSamples(a, b, size: Int64(data.count)))
 }
+
+@Test func progressionCompteLesFichiersEtMoyenneLaVitesse() throws {
+    let box = try Sandbox()
+    for i in 1...3 { try box.write("d/f\(i).bin", in: box.src, String(repeating: "x", count: 20_000)) }
+    try box.write("vieux.txt", in: box.dst)
+    let plan = try box.plan()
+    var seen: [SyncProgress] = []
+    let result = SyncRunner.run(plan: plan, roots: Roots(src: box.src, dst: box.dst), acknowledged: true) { seen.append($0) }
+    #expect(result.succeeded)
+    let copying = seen.filter { $0.phase == .copying }
+    #expect(copying.map(\.filesTotal).allSatisfy { $0 == 3 })
+    #expect(copying.first?.fileIndex == 1)
+    #expect(copying.last.map { $0.fileIndex <= 3 } == true)
+    #expect(copying.map(\.fileIndex) == copying.map(\.fileIndex).sorted())
+    // Le compte des fichiers à effacer ne fait pas avancer le rang de copie.
+    #expect(seen.filter { $0.phase == .deleting }.allSatisfy { $0.fileIndex == 0 })
+    #expect(result.progress.fileIndex == 3)
+    #expect(result.progress.copyElapsed > 0)
+    #expect(result.progress.copyElapsed <= result.progress.elapsed)
+    #expect(result.averageSpeed > 0)
+}

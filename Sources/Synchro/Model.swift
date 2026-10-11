@@ -230,15 +230,18 @@ final class AppModel: ObservableObject {
     private func showDemo(_ state: String) {
         activePreset = selection
         let copied = 2_381, size: Int64 = 56_300_000
-        var p = SyncProgress(bytesTotal: Int64(copied) * size, deleteItemsTotal: 3, startedAt: Date().addingTimeInterval(-767))
+        var p = SyncProgress(bytesTotal: Int64(copied) * size, filesTotal: copied, deleteItemsTotal: 3,
+                             startedAt: Date().addingTimeInterval(-767))
         p.phase = .copying
         p.copied = 1_478
+        p.fileIndex = 1_479
         p.bytesDone = Int64(p.copied) * size
         p.deleted = 37
         p.deleteItemsDone = 3
         p.current = "2026/Islande/DSCF4821.RAF"
         p.speed = 108_000_000
         p.elapsed = 767
+        p.copyElapsed = 760
         var demo = SyncPlan()
         demo.unchanged = 48_912
         demo.sourceFiles = 48_912 + copied
@@ -266,6 +269,7 @@ final class AppModel: ObservableObject {
             p.copied = copied
             p.bytesDone = p.bytesTotal
             p.elapsed = 1_262
+            p.copyElapsed = 1_250
             progress = p
             phase = .done(Outcome(result: SyncResult(progress: p, unchanged: 48_912), unchanged: 48_912, finishedAt: Date(), journal: nil))
         default:

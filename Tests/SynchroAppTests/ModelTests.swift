@@ -317,3 +317,73 @@ struct ImportExportTests {
         #expect(throws: SyncError.self) { try bench.model.importPresets(from: file) }
     }
 }
+
+// MARK: - Mise à jour
+
+@Test func numerosDeVersionCompares() throws {
+    let v = { (s: String) in try #require(Updater.Version(s)) }
+    #expect(try v("1.4") < v("1.5"))
+    #expect(try v("1.9") < v("1.10"))
+    #expect(try v("v1.5") == v("1.5.0"))
+    #expect(try !(v("2.0") < v("1.12")))
+    #expect(try v("1.4").description == "1.4")
+    #expect(Updater.Version("") == nil)
+    #expect(Updater.Version("1.a") == nil)
+    #expect(Updater.Version("abc") == nil)
+}
+
+@Test func reponseGitHubLue() throws {
+    let json = """
+    {"tag_name": "v1.5", "html_url": "https://github.com/mdany75/Synchro/releases/tag/v1.5",
+     "body": "### Ajouté\\n- Mise à jour proposée.\\n",
+     "assets": [{"name": "notes.txt", "browser_download_url": "https://example.test/notes.txt"},
+                {"name": "Synchro.dmg", "browser_download_url": "https://example.test/Synchro.dmg"}]}
+    """
+    let release = try Updater.parse(Data(json.utf8))
+    #expect(release.version == Updater.Version("1.5"))
+    #expect(release.download.lastPathComponent == "Synchro.dmg")
+    #expect(release.page.path.hasSuffix("/v1.5"))
+    #expect(Updater.summary(of: release.notes) == "Ajouté\n• Mise à jour proposée.")
+
+    let sansImage = #"{"tag_name": "v1.5", "html_url": "https://example.test/", "assets": []}"#
+    #expect(throws: SyncError.self) { try Updater.parse(Data(sansImage.utf8)) }
+    #expect(throws: SyncError.self) { try Updater.parse(Data("pas du JSON".utf8)) }
+}
+
+@Test func notesDeVersionRaccourcies() {
+    let long = String(repeating: "- ligne\n", count: 200)
+    let text = Updater.summary(of: long, limit: 50)
+    #expect(text.hasSuffix("…"))
+    #expect(text.count <= 52)
+}
+
+@Test func appNonRemplacableDepuisUneImageOuSansDroit() throws {
+    #expect(!Updater.canReplace(URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/abc/d/Synchro.app")))
+    #expect(!Updater.canReplace(URL(fileURLWithPath: "/usr/bin/true")))
+    #expect(!Updater.canReplace(URL(fileURLWithPath: "/System/Applications/Synchro.app")))
+}
+
+/// Une image disque qui contient une app non signée ne remplace jamais l'app en place.
+@Test func remplacementRefuseSansSignatureDeveloperID() throws {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("synchro-maj-test-" + UUID().uuidString)
+    defer { try? fm.removeItem(at: root) }
+    let apps = root.appendingPathComponent("Applications")
+    let app = apps.appendingPathComponent("Synchro.app")
+    try fm.createDirectory(at: app.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+    try Data("ancienne".utf8).write(to: app.appendingPathComponent("Contents/MacOS/Synchro"))
+
+    let stage = root.appendingPathComponent("stage")
+    let fake = stage.appendingPathComponent("Synchro.app")
+    try fm.createDirectory(at: fake.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+    try Data("nouvelle".utf8).write(to: fake.appendingPathComponent("Contents/MacOS/Synchro"))
+    let dmgDir = root.appendingPathComponent("maj")
+    try fm.createDirectory(at: dmgDir, withIntermediateDirectories: true)
+    let dmg = dmgDir.appendingPathComponent("Synchro.dmg")
+    try Updater.run("/usr/bin/hdiutil", ["create", "-quiet", "-srcfolder", stage.path, "-volname", "Synchro", "-format", "UDZO", dmg.path])
+
+    #expect(throws: SyncError.self) { try Updater.replace(app: app, with: dmg, team: nil) }
+    #expect(try String(contentsOf: app.appendingPathComponent("Contents/MacOS/Synchro"), encoding: .utf8) == "ancienne")
+    #expect(try fm.contentsOfDirectory(atPath: apps.path) == ["Synchro.app"])
+    #expect(!fm.fileExists(atPath: dmgDir.appendingPathComponent("image").path))
+}

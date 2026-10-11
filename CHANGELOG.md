@@ -1,5 +1,14 @@
 # Changements
 
+## 1.5 — 2026-10-11
+### Ajouté
+- Mise à jour proposée : au lancement, au plus une fois par jour, Synchro vérifie sur GitHub si une version plus récente est publiée et propose de l'installer en un clic (téléchargement, contrôle de la signature Developer ID, remplacement de l'app dans son dossier, relance). Menu Synchro → « Rechercher une mise à jour… » pour vérifier tout de suite.
+- Pendant la copie, l'étape indique « fichier N sur M », au-dessus du nom du fichier en cours.
+### Modifié
+- Vitesse et temps restant sont des moyennes depuis le début de la copie, au lieu des dernières secondes : les chiffres ne sautent plus à chaque fichier.
+- Le titre « Synchro » de la barre d'outils est aligné sur le contenu de la fenêtre.
+- README : plus de manipulation « Ouvrir quand même », l'app étant signée et notarisée depuis la 1.4.
+
 ## 1.4 — 2026-10-08
 ### Modifié
 - Application signée avec un certificat Apple Developer ID et image disque notarisée par Apple : plus de « Ouvrir quand même » au premier lancement, et les autorisations d'accès aux disques sont conservées d'une version à l'autre.

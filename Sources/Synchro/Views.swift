@@ -56,19 +56,29 @@ struct ContentView: View {
                 .padding(10)
             }
         } detail: {
-            if let id = model.selection, let preset = binding(for: id) {
-                PresetDetail(preset: preset)
-            } else if model.presets.isEmpty {
-                ContentUnavailableView {
-                    Label("Aucune tâche", systemImage: "arrow.triangle.2.circlepath")
-                } description: {
-                    Text("Une tâche relie un dossier source à sa sauvegarde.")
-                } actions: {
-                    Button("Ajouter une tâche") { model.addPreset() }
+            Group {
+                if let id = model.selection, let preset = binding(for: id) {
+                    PresetDetail(preset: preset)
+                } else if model.presets.isEmpty {
+                    ContentUnavailableView {
+                        Label("Aucune tâche", systemImage: "arrow.triangle.2.circlepath")
+                    } description: {
+                        Text("Une tâche relie un dossier source à sa sauvegarde.")
+                    } actions: {
+                        Button("Ajouter une tâche") { model.addPreset() }
+                    }
+                } else {
+                    ContentUnavailableView("Sélectionnez une tâche", systemImage: "sidebar.left",
+                                           description: Text("Choisissez une tâche dans la liste de gauche."))
                 }
-            } else {
-                ContentUnavailableView("Sélectionnez une tâche", systemImage: "sidebar.left",
-                                       description: Text("Choisissez une tâche dans la liste de gauche."))
+            }
+            // Le titre que macOS place dans la barre d'outils est décalé par rapport au contenu : on cache
+            // le sien et on pose le nôtre, aligné sur la marge du détail (voir PresetDetail.margin).
+            .background(WindowTitleHider())
+            .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Text("Synchro").font(.headline).padding(.leading, PresetDetail.margin - 8)
+                }
             }
         }
         .onAppear { model.reopenWindow = { openWindow(id: "main") } }
@@ -115,6 +125,14 @@ struct ContentView: View {
     }
 }
 
+/// Masque le titre que la fenêtre affiche elle-même (la fenêtre garde son nom dans le menu Fenêtre et le Dock).
+struct WindowTitleHider: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { view.window?.titleVisibility = .hidden }
+    }
+}
+
 struct TaskRow: View {
     @EnvironmentObject var model: AppModel
     let preset: Preset
@@ -158,6 +176,8 @@ struct TaskRow: View {
 struct PresetDetail: View {
     @EnvironmentObject var model: AppModel
     @Binding var preset: Preset
+    /// Marge du contenu, sur laquelle le titre de la fenêtre est aligné.
+    static let margin: CGFloat = 20
 
     private var isActive: Bool { model.activePreset == preset.id }
     private var locked: Bool { model.isActive(preset.id) }
@@ -251,7 +271,7 @@ struct PresetDetail: View {
 
             if model.treeCollapsed { Spacer(minLength: 0) }
         }
-        .padding(20)
+        .padding(Self.margin)
     }
 
     private var startHelp: String {
@@ -492,7 +512,7 @@ struct StatusView: View {
                 }
                 if p.bytesTotal > 0 {
                     StatTile(label: "Restant", value: p.phase == .copying ? Fmt.duration(p.remaining) : "—")
-                    StatTile(label: "Vitesse", value: Fmt.speed(p.speed))
+                    StatTile(label: "Vitesse moyenne", value: Fmt.speed(p.speed))
                     StatTile(label: "Transféré", value: "\(Fmt.bytes(p.bytesDone)) / \(Fmt.bytes(p.bytesTotal))")
                 }
             }
@@ -505,7 +525,10 @@ struct StatusView: View {
         case .preparing: return "Préparation…"
         case .deleting: return "Suppression — \(p.deleteItemsDone.formatted()) / \(p.deleteItemsTotal.formatted())"
         case .folders: return "Création des dossiers…"
-        case .copying: return "Copie"
+        case .copying:
+            return p.filesTotal > 0
+                ? "Copie — fichier \(p.fileIndex.formatted()) sur \(p.filesTotal.formatted())"
+                : "Copie"
         case .verifying: return "Vérification des dates…"
         case .finished: return "Finalisation…"
         }
