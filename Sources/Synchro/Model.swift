@@ -100,6 +100,62 @@ struct PreviewContext {
     var scope: [String] = []
 }
 
+/// Ce qu'un élément de la source a comme pendant sur la destination.
+enum DestinationStatus {
+    /// Même taille et même date (dossier : présent, sans différence connue).
+    case same
+    /// Présent, mais différent (dossier : au moins une différence à l'intérieur).
+    case different
+    /// Absent de la destination.
+    case missing
+
+    var color: Color {
+        switch self {
+        case .same: return .green
+        case .different: return .orange
+        case .missing: return .red
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .same: return "identique sur la destination"
+        case .different: return "différent sur la destination"
+        case .missing: return "absent de la destination"
+        }
+    }
+}
+
+/// Calcul des pastilles : les éléments d'un dossier de la source, comparés au dossier correspondant de la destination.
+enum StatusCheck {
+    /// `nil` si le dossier de destination est illisible (pas de pastille plutôt qu'une pastille fausse).
+    nonisolated static func statuses(for items: [TreeItem], in dstDir: URL, knownDifferences: Set<String>) -> [String: DestinationStatus]? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        let exists = fm.fileExists(atPath: dstDir.path, isDirectory: &isDir) && isDir.boolValue
+        var there: [String: (isDir: Bool, size: Int64, mtime: Date)] = [:]
+        if exists {
+            let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+            guard let urls = try? fm.contentsOfDirectory(at: dstDir, includingPropertiesForKeys: keys, options: []) else { return nil }
+            for url in urls {
+                let v = try? url.resourceValues(forKeys: Set(keys))
+                there[Scanner.excludeKey(url.lastPathComponent)] = (v?.isDirectory == true, Int64(v?.fileSize ?? 0), v?.contentModificationDate ?? .distantPast)
+            }
+        }
+        var out: [String: DestinationStatus] = [:]
+        for item in items {
+            let key = Scanner.excludeKey(item.rel)
+            guard let d = there[Scanner.excludeKey(item.name)], d.isDir == item.isDir else { out[item.rel] = .missing; continue }
+            if item.isDir {
+                out[item.rel] = knownDifferences.contains(key) ? .different : .same
+            } else {
+                out[item.rel] = d.size == item.size && abs(d.mtime.timeIntervalSince(item.mtime)) <= 2 ? .same : .different
+            }
+        }
+        return out
+    }
+}
+
 /// État affiché après une analyse ou une synchronisation terminée.
 struct Outcome {
     /// `nil` quand l'analyse n'a rien trouvé à faire.
@@ -128,7 +184,31 @@ final class AppModel: ObservableObject {
     /// Modifications en attente : une tâche n'est réécrite qu'après « Enregistrer ».
     @Published var drafts: [UUID: Preset] = [:]
     @Published var selection: UUID? {
-        didSet { if selection != oldValue { treeSelection = [] } }
+        didSet {
+            if selection != oldValue {
+                treeSelection = []
+                destinationStatus = [:]
+                knownDifferences = []
+            }
+        }
+    }
+
+    /// La destination d'une tâche, si elle est déjà accessible (rien n'est connecté pour une simple pastille).
+    nonisolated static func destinationRoot(for preset: Preset) -> URL? {
+        Mounter.locateMounted(preset.destination)
+    }
+
+    /// Dossiers (et parents) touchés par un plan : ils porteront une pastille orange tant que rien n'est synchronisé.
+    nonisolated static func foldersWithDifferences(in plan: SyncPlan) -> Set<String> {
+        var out = Set<String>()
+        for rel in plan.copies.map(\.rel) + plan.deletes.map(\.rel) {
+            var cur = Scanner.excludeKey(rel)
+            while let slash = cur.lastIndex(of: "/") {
+                cur = String(cur[..<slash])
+                out.insert(cur)
+            }
+        }
+        return out
     }
     @Published var phase: Phase = .idle
     @Published var activePreset: UUID?
@@ -149,6 +229,10 @@ final class AppModel: ObservableObject {
     var treeAnchor: String?
     /// Maquette seulement : dessine un menu contextuel ouvert dans la liste de la source.
     @Published var demoMenu = false
+    /// État de chaque élément de la source sur la destination (chemin relatif → état), pour la pastille.
+    @Published var destinationStatus: [String: DestinationStatus] = [:]
+    /// Dossiers où la dernière analyse a trouvé une différence (et leurs parents) : pastille orange.
+    @Published var knownDifferences: Set<String> = []
     @Published var treeCollapsed = UserDefaults.standard.bool(forKey: "treeCollapsed") {
         didSet { UserDefaults.standard.set(treeCollapsed, forKey: "treeCollapsed") }
     }
@@ -267,6 +351,9 @@ final class AppModel: ObservableObject {
         case "lot":
             treeSelection = ["2024", "Exports", "Photos Archives"]
             demoMenu = true
+        case "etat":
+            destinationStatus = ["2024": .same, "2025": .same, "2026": .different, "Exports": .missing,
+                                 "Lightroom Catalog": .different, "Photos Archives": .same, "Lisez-moi.txt": .same]
         case "differences-selection":
             let day = Date()
             demo.unchanged = 1_204
@@ -555,6 +642,8 @@ final class AppModel: ObservableObject {
                         self.plan = ready
                         self.context = context
                         self.phase = .preview
+                        if scope.isEmpty { self.knownDifferences = Self.foldersWithDifferences(in: ready) }
+                        self.treeToken += 1
                     }
                     // L'analyse d'un NAS peut durer : on prévient si l'utilisateur est passé à autre chose.
                     if !NSApplication.shared.isActive || Date().timeIntervalSince(started) > 20 {
@@ -636,6 +725,7 @@ final class AppModel: ObservableObject {
                 self.plan = nil
                 self.stopping = false
                 self.phase = .done(Outcome(result: result, unchanged: result.unchanged, finishedAt: result.finishedAt, journal: journal))
+                if result.succeeded { self.knownDifferences = [] }
                 self.treeToken += 1
                 if result.succeeded {
                     self.markSynced(preset.id, at: result.finishedAt, roots: roots, analysisStart: analysisStart)

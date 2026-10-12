@@ -58,6 +58,20 @@ public enum Mounter {
     }
 
     /// Dossier déposé ou choisi : suit les alias Finder et les liens symboliques jusqu'au vrai dossier.
+    /// Où se trouve la destination si elle est déjà accessible, sans rien connecter : un chemin local existant,
+    /// ou un partage SMB déjà monté. Sinon `nil`.
+    public static func locateMounted(_ dest: String) -> URL? {
+        let trimmed = dest.trimmingCharacters(in: .whitespaces)
+        guard isSMB(trimmed) else {
+            let path = (trimmed as NSString).expandingTildeInPath
+            guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: path) else { return nil }
+            return URL(fileURLWithPath: path)
+        }
+        guard let address = parse(trimmed), let mount = existingMount(host: address.host, share: address.share) else { return nil }
+        let url = address.sub.isEmpty ? mount : mount.appendingPathComponent(address.sub)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     public static func resolveDropped(_ url: URL) -> URL {
         var u = url
         if (try? u.resourceValues(forKeys: [.isAliasFileKey]))?.isAliasFile == true,

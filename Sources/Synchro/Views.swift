@@ -305,7 +305,10 @@ struct PresetDetail: View {
                      + Text(" · ✕ ignoré. Cliquez sur le symbole pour changer. Un élément ignoré n'est jamais copié ; ")
                      + Text(preset.mirrorIgnored
                             ? "mode Image : s'il se trouve sur la destination, il en est effacé, dossier compris."
-                            : "mode Copie : s'il se trouve sur la destination, il y reste tel quel."))
+                            : "mode Copie : s'il se trouve sur la destination, il y reste tel quel.")
+                     + Text(" Pastille : ") + Text("● identique").foregroundColor(.green) + Text(" · ")
+                     + Text("● différent").foregroundColor(.orange) + Text(" · ")
+                     + Text("● absent").foregroundColor(.red) + Text(" sur la destination."))
                         .font(.caption).foregroundStyle(.secondary)
                         // Trois lignes au plus, servies avant la liste. Surtout pas de fixedSize ici : la hauteur
                         // minimale de la fenêtre se calculerait sur un texte replié à l'extrême, et tout déborderait.
@@ -926,6 +929,8 @@ struct TreeItem: Identifiable, Sendable {
     let url: URL
     let rel: String
     let isDir: Bool
+    var size: Int64 = 0
+    var mtime = Date.distantPast
     var id: String { rel }
     var name: String { url.lastPathComponent }
 }
@@ -1022,14 +1027,24 @@ struct TreeChildren: View {
 
     private func load() async {
         let dir = dir, rel = rel, ignoreHidden = preset.ignoreHidden
-        listing = await Task.detached { Self.list(dir: dir, rel: rel, ignoreHidden: ignoreHidden) }.value
+        let dstRoot = AppModel.destinationRoot(for: preset)
+        let known = model.knownDifferences
+        let (result, statuses) = await Task.detached { () -> (TreeListing, [String: DestinationStatus]?) in
+            let result = Self.list(dir: dir, rel: rel, ignoreHidden: ignoreHidden)
+            // Pastilles : une seule lecture du dossier correspondant de la destination, si elle est accessible.
+            guard let dstRoot, case .items(let items) = result else { return (result, nil) }
+            let dstDir = rel.isEmpty ? dstRoot : dstRoot.appendingPathComponent(rel)
+            return (result, StatusCheck.statuses(for: items, in: dstDir, knownDifferences: known))
+        }.value
+        listing = result
+        if let statuses { model.destinationStatus.merge(statuses) { _, new in new } }
     }
 
     nonisolated static func list(dir: URL, rel: String, ignoreHidden: Bool) -> TreeListing {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return .missing }
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .fileSizeKey, .contentModificationDateKey]
         guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) else {
             return .denied
         }
@@ -1037,7 +1052,8 @@ struct TreeChildren: View {
             let v = try? url.resourceValues(forKeys: Set(keys))
             let name = url.lastPathComponent
             if Scanner.isIgnoredName(name, hidden: v?.isHidden == true, ignoreHidden: ignoreHidden) { return nil }
-            return TreeItem(url: url, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true)
+            return TreeItem(url: url, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true,
+                            size: Int64(v?.fileSize ?? 0), mtime: v?.contentModificationDate ?? .distantPast)
         }
         // Les dossiers d'abord : ce sont eux qu'on ignore le plus souvent, ils ne doivent pas se perdre après des milliers de photos.
         .sorted { a, b in
@@ -1171,6 +1187,11 @@ struct TreeRow: View {
                     .accessibilityHidden(true)
                 Text(item.name).lineLimit(1).truncationMode(.middle).strikethrough(ignored)
                 Spacer()
+                if !ignored, let status = model.destinationStatus[item.rel] {
+                    Circle().fill(status.color).frame(width: 9, height: 9)
+                        .help(status.label)
+                        .accessibilityLabel(status.label)
+                }
                 if exceptions > 0 {
                     Text(Fmt.count(exceptions, "ignoré", "ignorés")).font(.caption).foregroundStyle(TreeRow.partialColor)
                 }

@@ -385,6 +385,34 @@ struct ModelTests {
         Batch.ignoreAll(in: bench.src, rel: "", except: [], preset: binding)
         #expect(Set(preset.excludes) == ["2024", "2025", "Exports", "Rejets", "Lisez-moi.txt"])
     }
+
+    /// Pastilles : identique, différent ou absent, dossier par dossier, sans rien connecter.
+    @Test func etatSurLaDestination() throws {
+        let bench = try Bench()
+        try bench.write("2024/a.raf", in: bench.src, mtime: old)
+        try bench.write("2024/a.raf", in: bench.dst, mtime: old)
+        try bench.write("b.raf", in: bench.src, "nouveau contenu")
+        try bench.write("b.raf", in: bench.dst, "ancien")
+        try bench.write("c.raf", in: bench.src)
+        try bench.write("Exports/e.jpg", in: bench.src)
+        try bench.write("Memes/f.txt", in: bench.src, mtime: old)
+        try bench.write("Memes/f.txt", in: bench.dst, mtime: old)
+        guard case .items(let items) = TreeChildren.list(dir: bench.src, rel: "", ignoreHidden: true) else { Issue.record("liste illisible"); return }
+
+        let statuses = try #require(StatusCheck.statuses(for: items, in: bench.dst, knownDifferences: ["2024"]))
+        #expect(statuses == ["2024": .different, "Memes": .same, "b.raf": .different, "c.raf": .missing, "Exports": .missing])
+        let inside = try #require(StatusCheck.statuses(for: items.filter { $0.rel == "2024" }, in: bench.dst, knownDifferences: []))
+        #expect(inside == ["2024": .same])
+
+        #expect(AppModel.destinationRoot(for: bench.task) == bench.dst)
+        #expect(Mounter.locateMounted("smb://nas-inexistant.local/partage") == nil)
+        #expect(Mounter.locateMounted("/dossier/inexistant") == nil)
+
+        var plan = SyncPlan()
+        plan.copies = [Entry(rel: "2026/Islande/x.raf", isDir: false, size: 1, mtime: old)]
+        plan.deletes = [DeleteItem(rel: "Exports/Brouillons", isDir: true, files: 1, bytes: 1)]
+        #expect(AppModel.foldersWithDifferences(in: plan) == ["2026", "2026/islande", "exports"])
+    }
 }
 
 // MARK: - Mise à jour

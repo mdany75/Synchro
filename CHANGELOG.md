@@ -1,5 +1,9 @@
 # Changements
 
+## 1.8 — 2026-10-12
+### Ajouté
+- Pastille d'état devant chaque ligne de la liste de la source : verte si l'élément est identique sur la destination (même taille, même date), orange s'il est différent, rouge s'il en est absent. Un dossier est vert s'il existe, rouge s'il manque, orange quand la dernière analyse y a trouvé des différences ; après une synchronisation réussie, tout repasse au vert. Calculée dossier par dossier, en une lecture de la destination, et seulement si celle-ci est déjà accessible.
+
 ## 1.7 — 2026-10-12
 ### Ajouté
 - **Différences** : « Afficher les différences… » (flèche du bouton Synchroniser) et « Afficher les différences de la sélection » (clic droit dans la liste de la source) ouvrent la même analyse que l'aperçu, en lecture seule : nouveaux ou modifiés avec la raison, seulement sur la destination, inchangés, et « Enregistrer la liste… » en fichier texte. Limitée à une sélection, l'analyse ne lit que ces éléments.
