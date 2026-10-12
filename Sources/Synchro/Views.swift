@@ -925,13 +925,16 @@ struct PreviewSheet: View {
 // MARK: - Arborescence de la source
 
 struct TreeItem: Identifiable, Sendable {
-    let url: URL
+    /// Dossier qui le contient (le même objet pour tous les éléments d'un dossier) et nom : garder une URL par élément
+    /// coûte une dizaine de Ko chacune, soit plus d'un demi-gigaoctet pour un dossier de 50 000 fichiers.
+    let dir: URL
+    let name: String
     let rel: String
     let isDir: Bool
     var size: Int64 = 0
     var mtime = Date.distantPast
     var id: String { rel }
-    var name: String { url.lastPathComponent }
+    var url: URL { dir.appendingPathComponent(name, isDirectory: isDir) }
 }
 
 enum TreeListing: Sendable {
@@ -947,7 +950,7 @@ enum Icons {
     private static var cache: [String: NSImage] = [:]
 
     static func icon(for item: TreeItem) -> NSImage {
-        let key = (item.isDir ? "dossier." : "fichier.") + item.url.pathExtension.lowercased()
+        let key = (item.isDir ? "dossier." : "fichier.") + (item.name as NSString).pathExtension.lowercased()
         if let hit = cache[key] { return hit }
         let image = NSWorkspace.shared.icon(forFile: item.url.path)
         cache[key] = image
@@ -955,9 +958,36 @@ enum Icons {
     }
 }
 
+/// État de la liste de la source : dossiers dépliés et contenu lu de chacun. La liste est plate et paresseuse :
+/// seules les lignes visibles à l'écran sont construites, même pour un dossier de dizaines de milliers de fichiers
+/// (construire d'un coup toutes les lignes d'un dossier déplié faisait planter l'app vers 40 000 éléments).
+struct TreeState {
+    /// Dossiers dépliés : chemin relatif → dossier.
+    var expanded: [String: URL] = [:]
+    /// Contenu lu de la racine ("") et de chaque dossier déplié.
+    var listings: [String: TreeListing] = [:]
+    /// Change à chaque relecture complète : le résultat d'une lecture lancée avant est ignoré.
+    var generation = 0
+}
+
+/// Une ligne de la liste plate : un élément, ou une indication (chargement, dossier vide, filtre…).
+struct TreeLine: Identifiable {
+    enum Kind {
+        case item(TreeItem, inherited: Bool, siblings: [String])
+        case loading
+        case note(String)
+    }
+    let id: String
+    let depth: Int
+    let kind: Kind
+}
+
 struct SourceTree: View {
     @EnvironmentObject var model: AppModel
     @Binding var preset: Preset
+    @Local private var tree = TreeState()
+
+    private var root: URL { URL(fileURLWithPath: preset.sourcePath) }
 
     var body: some View {
         let path = preset.sourcePath
@@ -969,11 +999,22 @@ struct SourceTree: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        TreeChildren(dir: URL(fileURLWithPath: path), rel: "", depth: 0, inherited: false, preset: $preset)
+                        ForEach(lines()) { line in
+                            switch line.kind {
+                            case .item(let item, let inherited, let siblings):
+                                TreeRow(item: item, depth: line.depth, inherited: inherited, siblings: siblings,
+                                        preset: $preset, expanded: tree.expanded[item.rel] != nil) { toggle(item) }
+                            case .loading:
+                                ProgressView().controlSize(.small).padding(.leading, Self.indent(line.depth)).padding(.vertical, 3)
+                            case .note(let text):
+                                note(text, depth: line.depth)
+                            }
+                        }
                     }
                     .padding(.vertical, 4)
                 }
                 .overlay(alignment: .topLeading) { if model.demoMenu { DemoMenu().offset(x: 180, y: 100) } }
+                .task(id: model.treeToken) { reload() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -981,73 +1022,107 @@ struct SourceTree: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
     }
 
+    private static func indent(_ depth: Int) -> CGFloat { CGFloat(depth) * 18 + 34 }
+
     private func message(_ text: String) -> some View {
         Text(text).foregroundStyle(.secondary).padding(12)
     }
-}
 
-struct TreeChildren: View {
-    @EnvironmentObject var model: AppModel
-    let dir: URL
-    let rel: String
-    let depth: Int
-    let inherited: Bool
-    @Binding var preset: Preset
+    private func note(_ text: String, depth: Int) -> some View {
+        Text(text).font(depth == 0 ? .body : .caption).foregroundStyle(.secondary)
+            .padding(.leading, depth == 0 ? 12 : Self.indent(depth)).padding(.vertical, depth == 0 ? 10 : 3)
+    }
 
-    @Local private var listing = TreeListing.loading
-    private var indent: CGFloat { CGFloat(depth) * 18 + 34 }
-
-    var body: some View {
-        Group {
-            switch listing {
+    /// Aplatit l'arborescence : chaque dossier déplié insère ses enfants, filtrés, sous sa propre ligne.
+    private func lines() -> [TreeLine] {
+        var out: [TreeLine] = []
+        let ignoredKeys = Set(preset.excludes.map(Scanner.excludeKey))
+        let filter = model.listFilter, statuses = model.destinationStatus
+        func note(_ text: String, _ tag: String, _ rel: String, _ depth: Int) {
+            out.append(TreeLine(id: "/\(tag)/" + rel, depth: depth, kind: .note(text)))
+        }
+        func append(rel: String, depth: Int, inherited: Bool) {
+            switch tree.listings[rel] ?? .loading {
             case .loading:
-                ProgressView().controlSize(.small).padding(.leading, indent).padding(.vertical, 3)
+                out.append(TreeLine(id: "/chargement/" + rel, depth: depth, kind: .loading))
             case .missing:
                 if depth == 0 {
-                    message("Disque ou dossier introuvable. Branchez le disque : la liste se mettra à jour toute seule.")
+                    note("Disque ou dossier introuvable. Branchez le disque : la liste se mettra à jour toute seule.", "introuvable", rel, depth)
                 }
             case .denied:
-                message("Accès refusé par macOS. Autorisez Synchro dans Réglages Système → Confidentialité et sécurité → Fichiers et dossiers.")
+                note("Accès refusé par macOS. Autorisez Synchro dans Réglages Système → Confidentialité et sécurité → Fichiers et dossiers.",
+                     "refus", rel, depth)
             case .items(let all):
-                if all.isEmpty && depth == 0 { message("Ce dossier est vide.") }
-                let ignoredKeys = Set(preset.excludes.map(Scanner.excludeKey))
-                let shown = all.filter { item in
-                    model.listFilter.shows(ignored: inherited || ignoredKeys.contains(Scanner.excludeKey(item.rel)),
-                                           status: model.destinationStatus[item.rel])
+                if all.isEmpty && depth == 0 { note("Ce dossier est vide.", "vide", rel, depth) }
+                var shown: [(TreeItem, Bool)] = []
+                shown.reserveCapacity(all.count)
+                for item in all {
+                    let ignored = inherited || ignoredKeys.contains(Scanner.excludeKey(item.rel))
+                    if filter.shows(ignored: ignored, status: statuses[item.rel]) { shown.append((item, ignored)) }
                 }
-                let siblings = shown.map(\.rel)
-                ForEach(shown) { item in
-                    TreeRow(item: item, depth: depth, inherited: inherited, siblings: siblings, preset: $preset)
+                let siblings = shown.map(\.0.rel)
+                for (item, ignored) in shown {
+                    out.append(TreeLine(id: item.rel, depth: depth, kind: .item(item, inherited: inherited, siblings: siblings)))
+                    if item.isDir, tree.expanded[item.rel] != nil { append(rel: item.rel, depth: depth + 1, inherited: ignored) }
                 }
                 if shown.count < all.count {
-                    Text("\(Fmt.count(all.count - shown.count, "élément masqué par le filtre", "éléments masqués par le filtre")) (bouton Afficher).")
-                        .font(.caption).foregroundStyle(.secondary).padding(.leading, indent).padding(.vertical, 4)
+                    note("\(Fmt.count(all.count - shown.count, "élément masqué par le filtre", "éléments masqués par le filtre")) (bouton Afficher).",
+                         "filtre", rel, depth)
                 }
             }
         }
-        .task(id: model.treeToken) { await load() }
+        append(rel: "", depth: 0, inherited: false)
+        return out
     }
 
-    private func message(_ text: String) -> some View {
-        Text(text).font(depth == 0 ? .body : .caption).foregroundStyle(.secondary)
-            .padding(.leading, depth == 0 ? 12 : indent).padding(.vertical, depth == 0 ? 10 : 3)
+    /// Déplie ou replie un dossier. Replier oublie son contenu et ses sous-dossiers dépliés : la prochaine ouverture le relit.
+    private func toggle(_ item: TreeItem) {
+        if tree.expanded.removeValue(forKey: item.rel) != nil {
+            let prefix = item.rel + "/"
+            tree.listings[item.rel] = nil
+            tree.expanded = tree.expanded.filter { !$0.key.hasPrefix(prefix) }
+            tree.listings = tree.listings.filter { !$0.key.hasPrefix(prefix) }
+        } else {
+            tree.expanded[item.rel] = item.url
+            load(rel: item.rel, dir: item.url)
+        }
     }
 
-    private func load() async {
-        let dir = dir, rel = rel, ignoreHidden = preset.ignoreHidden
+    /// Relit la racine et tous les dossiers dépliés : au premier affichage, puis chaque fois que les disques ont pu changer.
+    private func reload() {
+        tree.generation += 1
+        tree.listings = [:]
+        if tree.expanded.isEmpty, let demo = ProcessInfo.processInfo.environment["SYNCHRO_DEPLIE"] {
+            // Capture de documentation : dossiers à montrer dépliés, séparés par des virgules.
+            for rel in demo.split(separator: ",").map(String.init) { tree.expanded[rel] = root.appendingPathComponent(rel) }
+        }
+        load(rel: "", dir: root)
+        for (rel, dir) in tree.expanded { load(rel: rel, dir: dir) }
+    }
+
+    private func load(rel: String, dir: URL) {
+        let generation = tree.generation
+        let ignoreHidden = preset.ignoreHidden
         let dstRoot = AppModel.destinationRoot(for: preset)
         let known = model.knownDifferences
-        let (result, statuses) = await Task.detached { () -> (TreeListing, [String: DestinationStatus]?) in
-            let result = Self.list(dir: dir, rel: rel, ignoreHidden: ignoreHidden)
-            // Pastilles : une seule lecture du dossier correspondant de la destination, si elle est accessible.
-            guard let dstRoot, case .items(let items) = result else { return (result, nil) }
-            let dstDir = rel.isEmpty ? dstRoot : dstRoot.appendingPathComponent(rel)
-            return (result, StatusCheck.statuses(for: items, in: dstDir, knownDifferences: known))
-        }.value
-        listing = result
-        if let statuses { model.destinationStatus.merge(statuses) { _, new in new } }
+        tree.listings[rel] = .loading
+        Task { @MainActor in
+            let (result, statuses) = await Task.detached { () -> (TreeListing, [String: DestinationStatus]?) in
+                let result = TreeLoader.list(dir: dir, rel: rel, ignoreHidden: ignoreHidden)
+                // Pastilles : une seule lecture du dossier correspondant de la destination, si elle est accessible.
+                guard let dstRoot, case .items(let items) = result else { return (result, nil) }
+                let dstDir = rel.isEmpty ? dstRoot : dstRoot.appendingPathComponent(rel)
+                return (result, StatusCheck.statuses(for: items, in: dstDir, knownDifferences: known))
+            }.value
+            guard tree.generation == generation else { return }
+            tree.listings[rel] = result
+            if let statuses { model.destinationStatus.merge(statuses) { _, new in new } }
+        }
     }
+}
 
+/// Lecture du contenu d'un dossier de la source, hors interface.
+enum TreeLoader {
     nonisolated static func list(dir: URL, rel: String, ignoreHidden: Bool) -> TreeListing {
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -1060,7 +1135,7 @@ struct TreeChildren: View {
             let v = try? url.resourceValues(forKeys: Set(keys))
             let name = url.lastPathComponent
             if Scanner.isIgnoredName(name, hidden: v?.isHidden == true, ignoreHidden: ignoreHidden) { return nil }
-            return TreeItem(url: url, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true,
+            return TreeItem(dir: dir, name: name, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true,
                             size: Int64(v?.fileSize ?? 0), mtime: v?.contentModificationDate ?? .distantPast)
         }
         // Les dossiers d'abord : ce sont eux qu'on ignore le plus souvent, ils ne doivent pas se perdre après des milliers de photos.
@@ -1087,7 +1162,7 @@ enum Batch {
 
     /// Ignore chaque enfant direct de `dir`, sauf les éléments de `except` et les dossiers qui en contiennent un.
     static func ignoreAll(in dir: URL, rel: String, except: Set<String>, preset: Binding<Preset>) {
-        guard case .items(let items) = TreeChildren.list(dir: dir, rel: rel, ignoreHidden: preset.wrappedValue.ignoreHidden) else { return }
+        guard case .items(let items) = TreeLoader.list(dir: dir, rel: rel, ignoreHidden: preset.wrappedValue.ignoreHidden) else { return }
         let kept = Set(except.map(Scanner.excludeKey))
         var toIgnore: [String] = []
         for item in items {
@@ -1141,7 +1216,10 @@ struct TreeRow: View {
     /// Les éléments du même dossier, dans l'ordre affiché : ⇧-clic sélectionne une plage parmi eux.
     let siblings: [String]
     @Binding var preset: Preset
-    @Local private var expanded = false
+    /// Dossier déplié ? Décidé par la liste, qui tient l'état de tous les dossiers.
+    let expanded: Bool
+    /// Déplie ou replie ce dossier.
+    let expand: () -> Void
     @Local private var hovering = false
 
     private var selected: Bool { model.treeSelection.contains(item.rel) }
@@ -1176,58 +1254,52 @@ struct TreeRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Button { expanded.toggle() } label: {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2.weight(.semibold)).frame(width: 12)
-                }
-                .buttonStyle(.plain)
-                .opacity(item.isDir ? 1 : 0)
-                .disabled(!item.isDir)
-                .accessibilityLabel(expanded ? "Replier \(item.name)" : "Déplier \(item.name)")
-                .accessibilityHidden(!item.isDir)
-
-                Image(nsImage: Icons.icon(for: item))
-                    .resizable().frame(width: 16, height: 16)
-                    .accessibilityHidden(true)
-                Text(item.name).lineLimit(1).truncationMode(.middle).strikethrough(ignored)
-                Spacer()
-                if !ignored, let status = model.destinationStatus[item.rel] {
-                    Circle().fill(status.color).frame(width: 9, height: 9)
-                        .help(status.label)
-                        .accessibilityLabel(status.label)
-                }
-                if exceptions > 0 {
-                    Text(Fmt.count(exceptions, "ignoré", "ignorés")).font(.caption).foregroundStyle(TreeRow.partialColor)
-                }
-                Button(action: toggle) {
-                    Image(systemName: ignored ? "xmark" : "arrow.right")
-                        .fontWeight(exceptions > 0 ? .heavy : .semibold)
-                        .foregroundStyle(tint)
-                        .frame(width: 22, height: 18)
-                }
-                .buttonStyle(.plain)
-                .disabled(inherited)
-                .help(hint)
-                .accessibilityLabel(item.name)
-                .accessibilityValue(ignored ? "ignoré" : (exceptions > 0 ? "synchronisé, avec des éléments ignorés à l'intérieur" : "synchronisé"))
-                .accessibilityHint(inherited ? "Ignoré par un dossier parent" : "Bascule entre synchronisé et ignoré")
+        HStack(spacing: 6) {
+            Button(action: expand) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2.weight(.semibold)).frame(width: 12)
             }
-            .opacity(ignored ? 0.5 : 1)
-            .padding(.leading, CGFloat(depth) * 18 + 8)
-            .padding(.trailing, 10)
-            .padding(.vertical, 3)
-            .background(selected ? Color.accentColor.opacity(0.18) : hovering ? Color.primary.opacity(0.05) : .clear)
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .onTapGesture { select() }
-            .contextMenu { menu }
+            .buttonStyle(.plain)
+            .opacity(item.isDir ? 1 : 0)
+            .disabled(!item.isDir)
+            .accessibilityLabel(expanded ? "Replier \(item.name)" : "Déplier \(item.name)")
+            .accessibilityHidden(!item.isDir)
 
-            if expanded {
-                AnyView(TreeChildren(dir: item.url, rel: item.rel, depth: depth + 1, inherited: ignored, preset: $preset))
+            Image(nsImage: Icons.icon(for: item))
+                .resizable().frame(width: 16, height: 16)
+                .accessibilityHidden(true)
+            Text(item.name).lineLimit(1).truncationMode(.middle).strikethrough(ignored)
+            Spacer()
+            if !ignored, let status = model.destinationStatus[item.rel] {
+                Circle().fill(status.color).frame(width: 9, height: 9)
+                    .help(status.label)
+                    .accessibilityLabel(status.label)
             }
+            if exceptions > 0 {
+                Text(Fmt.count(exceptions, "ignoré", "ignorés")).font(.caption).foregroundStyle(TreeRow.partialColor)
+            }
+            Button(action: toggle) {
+                Image(systemName: ignored ? "xmark" : "arrow.right")
+                    .fontWeight(exceptions > 0 ? .heavy : .semibold)
+                    .foregroundStyle(tint)
+                    .frame(width: 22, height: 18)
+            }
+            .buttonStyle(.plain)
+            .disabled(inherited)
+            .help(hint)
+            .accessibilityLabel(item.name)
+            .accessibilityValue(ignored ? "ignoré" : (exceptions > 0 ? "synchronisé, avec des éléments ignorés à l'intérieur" : "synchronisé"))
+            .accessibilityHint(inherited ? "Ignoré par un dossier parent" : "Bascule entre synchronisé et ignoré")
         }
+        .opacity(ignored ? 0.5 : 1)
+        .padding(.leading, CGFloat(depth) * 18 + 8)
+        .padding(.trailing, 10)
+        .padding(.vertical, 3)
+        .background(selected ? Color.accentColor.opacity(0.18) : hovering ? Color.primary.opacity(0.05) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { select() }
+        .contextMenu { menu }
     }
 
     private func toggle() {

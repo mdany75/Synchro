@@ -1,5 +1,10 @@
 # Changements
 
+## 1.11 — 2026-10-12
+### Corrigé
+- Déplier un dossier de plusieurs dizaines de milliers de fichiers (par exemple « Lightroom Camera Raw Cache », 40 000 fichiers) faisait quitter l'app aussitôt : la liste de la source construisait toutes les lignes d'un coup. Elle ne construit plus que les lignes visibles à l'écran, quel que soit le nombre de fichiers.
+- La liste occupait près d'un gigaoctet de mémoire pour un tel dossier ; environ quatre fois moins maintenant.
+
 ## 1.10 — 2026-10-12
 ### Ajouté
 - Pendant la copie, un clic sur la tuile « Vitesse moyenne » affiche la vitesse instantanée (cinq dernières secondes), et inversement ; le choix est mémorisé. Le temps restant reste calculé sur la moyenne.

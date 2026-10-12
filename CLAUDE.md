@@ -11,7 +11,7 @@ Ce projet suit le standard commun des projets de Dany (`/standard-projet` le vé
 | Construire | `./build.sh` (tests, puis `build/Synchro.app` et `build/Synchro.dmg` ; `--install` installe dans `/Applications`) |
 | Tester | `./test.sh` (moteur, puis déroulement d'une tâche ; dossiers temporaires seulement) |
 | Analyser sans interface | `build/Synchro.app/Contents/MacOS/Synchro --plan <source> <destination> [--exclude <chemin>]…` (n'écrit rien ; `--run` exécute aussitôt, sans aperçu) |
-| Capture hors écran | `CFFIXED_USER_HOME=<faux dossier personnel> SYNCHRO_DEMO=copie build/Synchro.app/Contents/MacOS/Synchro --snapshot capture.png` |
+| Capture hors écran | `CFFIXED_USER_HOME=<faux dossier personnel> SYNCHRO_DEMO=copie build/Synchro.app/Contents/MacOS/Synchro --snapshot capture.png` (`SYNCHRO_DEPLIE=<dossier>,<dossier>` : dossiers de la source à montrer dépliés) |
 
 Les fichiers produits vont dans `build/`, ignoré par git. Rien de compilé n'est commité.
 

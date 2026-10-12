@@ -374,7 +374,7 @@ struct ModelTests {
         try bench.write("Exports/e.jpg", in: bench.src)
         try bench.write("Memes/f.txt", in: bench.src, mtime: old)
         try bench.write("Memes/f.txt", in: bench.dst, mtime: old)
-        guard case .items(let items) = TreeChildren.list(dir: bench.src, rel: "", ignoreHidden: true) else { Issue.record("liste illisible"); return }
+        guard case .items(let items) = TreeLoader.list(dir: bench.src, rel: "", ignoreHidden: true) else { Issue.record("liste illisible"); return }
 
         let statuses = try #require(StatusCheck.statuses(for: items, in: bench.dst, knownDifferences: ["2024"]))
         #expect(statuses == ["2024": .different, "Memes": .same, "b.raf": .different, "c.raf": .missing, "Exports": .missing])
