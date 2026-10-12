@@ -75,32 +75,6 @@ enum TaskFiles {
     }
 }
 
-extension TaskFiles {
-    /// Les différences affichées, dans un fichier texte.
-    @MainActor static func exportDifferences(plan: SyncPlan, context: PreviewContext?) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Différences \(context?.taskName ?? "Synchro").txt"
-        panel.allowedContentTypes = [.plainText]
-        panel.canCreateDirectories = true
-        panel.prompt = "Enregistrer"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        var lines = ["Différences — \(context?.taskName ?? "")", "Source : \(context?.source ?? "")",
-                     "Destination : \(context?.resolvedDestination ?? "")", "Le \(Fmt.dateTime(Date()))", ""]
-        lines.append("Nouveaux ou modifiés (\(plan.copies.count.formatted()), \(Fmt.bytes(plan.bytesToCopy))) :")
-        for e in plan.copies.sorted(by: { $0.rel < $1.rel }) {
-            lines.append("  + \(e.rel) — \(e.reason ?? "à copier") (\(Fmt.bytes(e.size)))")
-        }
-        lines.append("")
-        lines.append("Seulement sur la destination (\(plan.filesToDelete.formatted()) fichiers, \(Fmt.bytes(plan.bytesToDelete))) :")
-        for d in plan.deletes.sorted(by: { $0.rel < $1.rel }) {
-            lines.append("  - \(d.rel)\(d.isDir ? "/ (\(Fmt.count(d.files, "fichier", "fichiers")), \(Fmt.bytes(d.bytes)))" : " (\(Fmt.bytes(d.bytes)))")")
-        }
-        lines.append("")
-        lines.append("Inchangés : \(plan.unchanged.formatted())")
-        try? (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
-    }
-}
-
 enum About {
     /// Fenêtre « À propos » standard, avec la seule version (« Version 1.1 ») : le numéro de compilation
     /// que macOS ajoute entre parenthèses n'apprend rien à l'utilisateur.

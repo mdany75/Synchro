@@ -339,29 +339,6 @@ struct ModelTests {
         #expect(bench2.read("Rejets/r.txt", in: bench2.src) != nil)
     }
 
-    /// Les différences se consultent sans rien pouvoir lancer, pour toute la tâche ou pour une sélection.
-    @Test func differencesEnConsultation() async throws {
-        let bench = try Bench()
-        try bench.write("2024/a.raf", in: bench.src, "nouveau")
-        try bench.write("2025/b.raf", in: bench.src, "nouveau")
-        try bench.write("vieux.txt", in: bench.dst)
-
-        bench.model.analyze(bench.task, readOnly: true)
-        try await bench.settle()
-        #expect(bench.model.isPreview && bench.model.context?.readOnly == true && bench.model.context?.scope == [])
-        #expect(bench.model.plan?.copies.count == 2 && bench.model.plan?.deletes.count == 1)
-        try await bench.confirm(acknowledged: true)
-        #expect(bench.model.isPreview)   // rien ne s'est lancé
-        #expect(bench.read("2024/a.raf", in: bench.dst) == nil && bench.read("vieux.txt", in: bench.dst) != nil)
-        bench.model.cancelPreview()
-
-        bench.model.analyze(bench.task, readOnly: true, scope: ["2024"])
-        try await bench.settle()
-        #expect(bench.model.context?.scope == ["2024"])
-        #expect(bench.model.plan?.copies.map(\.rel) == ["2024/a.raf"] && bench.model.plan?.deletes.isEmpty == true)
-        bench.model.cancelPreview()
-    }
-
     /// Actions par lot sur les éléments ignorés.
     @Test func ignorerParLot() throws {
         let bench = try Bench()
@@ -412,6 +389,21 @@ struct ModelTests {
         plan.copies = [Entry(rel: "2026/Islande/x.raf", isDir: false, size: 1, mtime: old)]
         plan.deletes = [DeleteItem(rel: "Exports/Brouillons", isDir: true, files: 1, bytes: 1)]
         #expect(AppModel.foldersWithDifferences(in: plan) == ["2026", "2026/islande", "exports"])
+    }
+
+    /// Le filtre d'affichage suit les pastilles et les éléments ignorés, et se mémorise.
+    @Test func filtreDAffichage() {
+        var f = ListFilter()
+        #expect(f.isDefault && f.shows(ignored: false, status: .same) && f.shows(ignored: true, status: nil))
+        f.same = false
+        f.ignored = false
+        #expect(!f.shows(ignored: false, status: .same) && f.shows(ignored: false, status: .different))
+        #expect(f.shows(ignored: false, status: .missing) && !f.shows(ignored: true, status: .same))
+        #expect(f.shows(ignored: false, status: nil))   // sans pastille : toujours affiché
+        f.save()
+        #expect(ListFilter.load() == f)
+        ListFilter().save()
+        #expect(ListFilter.load().isDefault)
     }
 }
 

@@ -1124,27 +1124,3 @@ private func mirrorIsExact(_ box: Sandbox) throws -> Bool {
     #expect(!box.exists("Rejets", in: box.dst) && !box.exists("a/brouillon.txt", in: box.dst))
     #expect(box.exists("a/x.txt", in: box.dst) && box.exists("Rejets/y.txt", in: box.src))
 }
-
-/// Analyse limitée à des éléments : seuls eux sont lus, un élément absent est passé sans erreur.
-@Test func analyseLimiteeAUneSelection() throws {
-    let box = try Sandbox()
-    try box.write("2024/a.raf", in: box.src, mtime: old)
-    try box.write("2024/a.raf", in: box.dst, mtime: old)
-    try box.write("2024/b.raf", in: box.src)
-    try box.write("2025/c.raf", in: box.src)
-    try box.write("Lisez-moi.txt", in: box.src, "version plus longue")
-    try box.write("Lisez-moi.txt", in: box.dst, "v1")
-    try box.write("2024/vieux.raf", in: box.dst)
-    try box.write("Exports/e.jpg", in: box.dst)
-    let only = ["2024", "Lisez-moi.txt", "Exports", "Inexistant"]
-    let s = try Scanner.scan(root: box.src, excludes: [], ignoreHidden: true, only: only) { _ in }
-    let d = try Scanner.scan(root: box.dst, excludes: [], ignoreHidden: true, flagHides: false, only: only) { _ in }
-    #expect(Set(s.entries.keys) == ["2024", "2024/a.raf", "2024/b.raf", "Lisez-moi.txt"])
-    #expect(Set(d.entries.keys) == ["2024", "2024/a.raf", "2024/vieux.raf", "Lisez-moi.txt", "Exports", "Exports/e.jpg"])
-    let plan = Scanner.plan(source: s, destination: d, options: PlanOptions())
-    #expect(Set(plan.copies.map(\.rel)) == ["2024/b.raf", "Lisez-moi.txt"])
-    #expect(plan.copies.first { $0.rel == "2024/b.raf" }?.reason == "absent de la destination")
-    #expect(plan.copies.first { $0.rel == "Lisez-moi.txt" }?.reason == "taille différente")
-    #expect(Set(plan.deletes.map(\.rel)) == ["2024/vieux.raf", "Exports"])
-    #expect(plan.unchanged == 1)
-}

@@ -162,7 +162,7 @@ struct TaskRow: View {
         if model.isActive(preset.id) {
             switch model.phase {
             case .scanning: return "Analyse en cours…"
-            case .preview: return model.context?.readOnly == true ? "Différences affichées" : "Confirmation requise"
+            case .preview: return "Confirmation requise"
             default: return "Synchronisation en cours…"
             }
         }
@@ -196,8 +196,6 @@ struct PresetDetail: View {
                         .disabled(model.stopping || model.isPreview)
                 } else {
                     Menu {
-                        Button("Afficher les différences…") { model.analyze(preset, readOnly: true) }
-                        Divider()
                         Button("Synchroniser en comparant tout le contenu (lent)…") { model.analyze(preset, verifyAll: true) }
                     } label: {
                         Label("Synchroniser…", systemImage: "arrow.triangle.2.circlepath")
@@ -226,10 +224,12 @@ struct PresetDetail: View {
                     .fixedSize()
                     .help("Copie : un élément ignoré déjà présent sur la destination y reste. Image : il en est effacé, dossier compris.")
                     Text(preset.mirrorIgnored
-                         ? "Un élément ignoré est effacé de la destination s'il s'y trouve, dossier compris."
-                         : "Un élément ignoré déjà présent sur la destination y reste tel quel.")
+                         ? "Déjà sur la destination : effacé, dossier compris."
+                         : "Déjà sur la destination : laissé tel quel.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
+                    Toggle("Ignorer les fichiers cachés", isOn: $preset.ignoreHidden)
+                        .toggleStyle(.checkbox)
                 }
             }
             .disabled(locked)
@@ -274,10 +274,6 @@ struct PresetDetail: View {
                             Batch.ignoreAll(in: URL(fileURLWithPath: preset.sourcePath), rel: "", except: model.treeSelection, preset: $preset)
                         }
                         .disabled(n == 0)
-                        Button("Afficher les différences de la sélection (\(n))") {
-                            model.analyze(preset, readOnly: true, scope: model.treeSelection.sorted())
-                        }
-                        .disabled(n == 0 || model.isBusy || dirty || preset.destination.isEmpty)
                         Divider()
                         Button("Tout ignorer (premier niveau)") {
                             Batch.ignoreAll(in: URL(fileURLWithPath: preset.sourcePath), rel: "", except: [], preset: $preset)
@@ -289,13 +285,26 @@ struct PresetDetail: View {
                     .menuStyle(.borderlessButton)
                     .fixedSize()
                     .help("Sélectionnez des lignes avec ⌘ (ou ⇧ pour une plage), puis ignorez ou synchronisez d'un coup. Clic droit sur une ligne : mêmes actions.")
+                    Menu {
+                        Section("Afficher dans la liste") {
+                            Toggle("● Identiques sur la destination", isOn: $model.listFilter.same)
+                            Toggle("● Différents", isOn: $model.listFilter.different)
+                            Toggle("● Absents de la destination", isOn: $model.listFilter.missing)
+                            Toggle("✕ Ignorés", isOn: $model.listFilter.ignored)
+                        }
+                        Divider()
+                        Button("Tout afficher") { model.listFilter = ListFilter() }.disabled(model.listFilter.isDefault)
+                    } label: {
+                        Label("Afficher", systemImage: model.listFilter.isDefault ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Choisir ce que la liste montre : identiques, différents, absents, ignorés. Les éléments sans pastille restent affichés.")
                     Button { model.treeToken += 1 } label: {
                         Label("Actualiser la liste", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
                     .buttonStyle(.borderless)
                     .help("Relire le contenu de la source")
-                    Toggle("Ignorer les fichiers cachés", isOn: $preset.ignoreHidden)
-                        .toggleStyle(.checkbox)
                 }
                 if !model.treeCollapsed {
                     SourceTree(preset: $preset)
@@ -691,12 +700,9 @@ struct PreviewSheet: View {
 
     private static let shown = 2000
     private var canRun: Bool { plan.blockedReason == nil && (plan.risks.isEmpty || acknowledged) }
-    /// Consultation des différences : mêmes listes, sans rien à lancer.
-    private var readOnly: Bool { context?.readOnly == true }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\(readOnly ? "Différences" : "Aperçu") — \(context?.taskName ?? "synchronisation")").font(.title2.weight(.semibold))
+            Text("Aperçu — \(context?.taskName ?? "synchronisation")").font(.title2.weight(.semibold))
 
             if let context {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
@@ -711,34 +717,26 @@ struct PreviewSheet: View {
                              : "\(context.resolvedDestination)  (\(context.destination))")
                             .lineLimit(1).truncationMode(.middle)
                     }
-                    if !context.scope.isEmpty {
-                        GridRow {
-                            Text("Limité à").foregroundStyle(.secondary)
-                            Text(context.scope.joined(separator: ", ")).lineLimit(1).truncationMode(.middle)
-                        }
-                    }
                 }
                 .font(.callout)
             }
 
             HStack(spacing: 8) {
-                StatTile(label: readOnly ? "Nouveaux ou modifiés" : "À copier",
-                         value: "\(plan.copies.count.formatted()) · \(Fmt.bytes(plan.bytesToCopy))")
-                StatTile(label: readOnly ? "Seulement sur la destination" : "À effacer de la destination",
+                StatTile(label: "À copier", value: "\(plan.copies.count.formatted()) · \(Fmt.bytes(plan.bytesToCopy))")
+                StatTile(label: "À effacer de la destination",
                          value: "\(plan.filesToDelete.formatted()) · \(Fmt.bytes(plan.bytesToDelete))",
-                         tint: plan.filesToDelete > 0 && !readOnly ? .red : nil)
+                         tint: plan.filesToDelete > 0 ? .red : nil)
                 StatTile(label: "Inchangés", value: plan.unchanged.formatted())
             }
 
             if plan.isEmpty {
-                Label(readOnly ? "Aucune différence : la destination est l'image de la source."
-                      : plan.conflicts.isEmpty ? "Tout est déjà à jour." : "Rien à copier ni à effacer.",
+                Label(plan.conflicts.isEmpty ? "Tout est déjà à jour." : "Rien à copier ni à effacer.",
                       systemImage: plan.conflicts.isEmpty ? "checkmark.circle.fill" : "info.circle")
                     .foregroundStyle(plan.conflicts.isEmpty ? Color.green : Color.secondary)
             } else {
                 Picker("Liste affichée", selection: $tab) {
-                    Text("\(readOnly ? "Seulement sur la destination" : "À effacer") (\(plan.deletes.count.formatted()))").tag(0)
-                    Text("\(readOnly ? "Nouveaux ou modifiés" : "À copier") (\(plan.copies.count.formatted()))").tag(1)
+                    Text("À effacer (\(plan.deletes.count.formatted()))").tag(0)
+                    Text("À copier (\(plan.copies.count.formatted()))").tag(1)
                 }
                 .pickerStyle(.segmented).labelsHidden()
 
@@ -747,14 +745,13 @@ struct PreviewSheet: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if tab == 0 {
                             ForEach(plan.deletes.prefix(Self.shown)) { item in
-                                row(item.rel, item.isDir ? "folder" : "doc", readOnly ? .primary : .red,
+                                row(item.rel, item.isDir ? "folder" : "doc", .red,
                                     item.isDir ? "\(Fmt.count(item.files, "fichier", "fichiers")) · \(Fmt.bytes(item.bytes))" : Fmt.bytes(item.bytes))
                             }
                             more(plan.deletes.count)
                         } else {
                             ForEach(plan.copies.prefix(Self.shown), id: \.rel) { entry in
-                                row(entry.rel, "doc", .primary,
-                                    readOnly ? [entry.reason, Fmt.bytes(entry.size)].compactMap { $0 }.joined(separator: " · ") : Fmt.bytes(entry.size))
+                                row(entry.rel, "doc", .primary, Fmt.bytes(entry.size))
                             }
                             more(plan.copies.count)
                         }
@@ -772,16 +769,9 @@ struct PreviewSheet: View {
 
             HStack {
                 Spacer()
-                if readOnly {
-                    Button("Enregistrer la liste…") { TaskFiles.exportDifferences(plan: plan, context: context) }
-                        .disabled(plan.isEmpty)
-                    Button("Fermer") { model.cancelPreview() }
-                        .keyboardShortcut(.defaultAction)
-                } else {
-                    Button(plan.isEmpty ? "Fermer" : "Annuler", role: .cancel) { model.cancelPreview() }
-                        .keyboardShortcut(.cancelAction)
-                }
-                if !plan.isEmpty && !readOnly {
+                Button(plan.isEmpty ? "Fermer" : "Annuler", role: .cancel) { model.cancelPreview() }
+                    .keyboardShortcut(.cancelAction)
+                if !plan.isEmpty {
                     // Jamais le bouton par défaut quand il y a des suppressions : la touche Retour ne doit rien effacer.
                     if plan.deletes.isEmpty {
                         Button(runTitle) { model.confirm(acknowledged: acknowledged) }
@@ -799,7 +789,7 @@ struct PreviewSheet: View {
         }
         .padding(20)
         .frame(width: 700, height: 620)
-        .onAppear { tab = readOnly || plan.deletes.isEmpty ? 1 : 0 }
+        .onAppear { tab = plan.deletes.isEmpty ? 1 : 0 }
     }
 
     private var runTitle: String {
@@ -869,9 +859,7 @@ struct PreviewSheet: View {
             if plan.skippedLinks > 0 {
                 note(Fmt.count(plan.skippedLinks, "lien symbolique n'est pas copié.", "liens symboliques ne sont pas copiés."), "link", .secondary)
             }
-            if readOnly {
-                EmptyView()
-            } else if let blocked = plan.blockedReason {
+            if let blocked = plan.blockedReason {
                 note(blocked, "hand.raised.fill", .red)
             } else if !plan.risks.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -1011,9 +999,18 @@ struct TreeChildren: View {
                 message("Accès refusé par macOS. Autorisez Synchro dans Réglages Système → Confidentialité et sécurité → Fichiers et dossiers.")
             case .items(let all):
                 if all.isEmpty && depth == 0 { message("Ce dossier est vide.") }
-                let siblings = all.map(\.rel)
-                ForEach(all) { item in
+                let ignoredKeys = Set(preset.excludes.map(Scanner.excludeKey))
+                let shown = all.filter { item in
+                    model.listFilter.shows(ignored: inherited || ignoredKeys.contains(Scanner.excludeKey(item.rel)),
+                                           status: model.destinationStatus[item.rel])
+                }
+                let siblings = shown.map(\.rel)
+                ForEach(shown) { item in
                     TreeRow(item: item, depth: depth, inherited: inherited, siblings: siblings, preset: $preset)
+                }
+                if shown.count < all.count {
+                    Text("\(Fmt.count(all.count - shown.count, "élément masqué par le filtre", "éléments masqués par le filtre")) (bouton Afficher).")
+                        .font(.caption).foregroundStyle(.secondary).padding(.leading, indent).padding(.vertical, 4)
                 }
             }
         }
@@ -1108,8 +1105,6 @@ struct DemoMenu: View {
             item("Ignorer tout le contenu de « Exports »")
             item("Synchroniser tout le contenu de « Exports »")
             item("Ignorer tout sauf la sélection dans « Exports »")
-            Divider().padding(.vertical, 4)
-            item("Afficher les différences de la sélection (3)")
         }
         .padding(5)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
@@ -1266,8 +1261,5 @@ struct TreeRow: View {
             }
             .disabled(model.treeSelection.isEmpty)
         }
-        Divider()
-        Button("Afficher les différences de \(what)") { model.analyze(preset, readOnly: true, scope: targets.sorted()) }
-            .disabled(model.isBusy || model.isDirty(preset.id) || preset.destination.isEmpty)
     }
 }

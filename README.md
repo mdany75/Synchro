@@ -10,8 +10,6 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 
 ![Contenu de la source : flèches, croix et pastilles d'état sur la destination](docs/elements-ignores.png)
 
-![Fenêtre Différences : nouveaux ou modifiés, avec la raison](docs/differences.png)
-
 *Captures réalisées avec des données fictives.*
 
 ## Fonctions
@@ -22,7 +20,7 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 - **Éléments ignorés** : dans l'arborescence de la source, cliquez sur la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est jamais copié ; s'il se trouve déjà sur la destination, le sélecteur **Copie / Image** de la tâche décide de son sort : en mode **Copie**, il y reste tel quel, même si son dossier parent disparaît de la source ; en mode **Image**, il en est effacé, dossier compris, pour que la destination soit l'image exacte de ce qui est synchronisé. Un dossier qui reste synchronisé mais contient des éléments ignorés porte une flèche jaune et leur nombre. Le lien « N éléments ignorés » en donne la liste complète.
 - **État sur la destination** : devant la flèche de chaque ligne, une pastille indique si l'élément est **● identique** (même taille, même date), **● différent** ou **● absent** sur la destination. Les fichiers sont comparés exactement ; un dossier est vert s'il existe, rouge s'il manque, et orange quand la dernière analyse y a trouvé des différences. Rien n'est connecté pour cela : la pastille n'apparaît que si la destination est déjà accessible.
 - **Ignorer par lot** : cliquez sur le nom d'une ligne pour la sélectionner, ⌘-clic pour en ajouter d'autres, ⇧-clic pour une plage dans le même dossier. Clic droit : ignorer ou synchroniser la sélection, tout le contenu d'un dossier, ou tout sauf la sélection. Le bouton **Par lot** offre les mêmes actions pour le premier niveau, plus « Tout ignorer » et « Ne plus rien ignorer ».
-- **Différences** : la flèche du bouton « Synchroniser… » propose « Afficher les différences… », et le clic droit « Afficher les différences de la sélection ». Même analyse que l'aperçu, en lecture seule : fichiers nouveaux ou modifiés avec la raison (absent de la destination, taille, date ou contenu différent), éléments présents seulement sur la destination, nombre d'inchangés, et « Enregistrer la liste… » pour en garder un fichier texte. Limitée à une sélection, l'analyse ne lit que ces éléments.
+- **Filtre d'affichage** : le bouton **Afficher** de la liste choisit ce qu'elle montre (identiques, différents, absents, ignorés). Les éléments sans pastille restent affichés ; une ligne indique combien sont masqués.
 - **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) ne sont jamais copiés.
 - **Destination SMB** : `smb://serveur/partage/dossier`. Le partage est connecté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
 - **Glisser-déposer** d'un dossier ou d'un alias sur les lignes Source et Destination.

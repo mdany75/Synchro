@@ -8,8 +8,6 @@ public struct Entry: Sendable, Equatable {
     /// Date du dernier changement du fichier lui-même (contenu, nom, attributs), quand le volume la fournit.
     /// Contrairement à la date de modification, un programme ne peut pas la remettre à une valeur passée.
     public let changed: Date?
-    /// Pour un fichier à copier : pourquoi (« absent de la destination », « taille différente »…).
-    public var reason: String?
 
     public init(rel: String, isDir: Bool, size: Int64, mtime: Date, changed: Date? = nil) {
         self.rel = rel
@@ -319,16 +317,14 @@ public enum Scanner {
     ///   - excludes: chemins relatifs passés par `excludeKey`.
     ///   - flagHides: écarter aussi ce qui porte l'attribut « masqué ». À réserver à la source : sur la destination,
     ///     cet attribut a pu être posé par le NAS ou un autre ordinateur, et ne doit pas rendre la sauvegarde invisible.
-    ///   - only: chemins relatifs auxquels limiter l'analyse (différences d'une sélection) ; vide = tout.
-    ///     Un élément absent est simplement passé, ce qui est normal sur la destination.
     public static func scan(root: URL, excludes: Set<String>, ignoreHidden: Bool, flagHides: Bool = true,
-                            only: [String] = [], tick: (Int) -> Void) throws -> ScanResult {
+                            tick: (Int) -> Void) throws -> ScanResult {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
                                       .attributeModificationDateKey, .isHiddenKey]
         let keySet = Set(keys)
         var out = ScanResult()
-        var stack: [(url: URL, rel: String)] = []
+        var stack: [(url: URL, rel: String)] = [(root, "")]
 
         func visit(_ item: URL, in parent: String) throws {
             let name = item.lastPathComponent
@@ -363,15 +359,6 @@ public enum Scanner {
             if isDir { stack.append((item, rel)) }
         }
 
-        if only.isEmpty {
-            stack = [(root, "")]
-        } else {
-            for rel in only {
-                let url = root.appendingPathComponent(rel)
-                guard fm.fileExists(atPath: url.path) else { continue }
-                try visit(url, in: (rel as NSString).deletingLastPathComponent)
-            }
-        }
         while let top = stack.popLast() {
             try Task.checkCancellation()
             let items: [URL]
@@ -486,10 +473,7 @@ public enum Scanner {
                 p.unchanged += 1
                 unchanged.append((k, s, d))
             } else {
-                var entry = s
-                entry.reason = d == nil || d?.isDir == true ? "absent de la destination"
-                    : d?.size != s.size ? "taille différente" : "date différente"
-                p.copies.append(entry)
+                p.copies.append(s)
                 p.bytesToCopy += s.size
                 if let d, !d.isDir {
                     p.replaced += 1
@@ -658,9 +642,7 @@ public enum Scanner {
             plan.replaced += 1
             plan.bytesReplaced += s.size
             plan.largestReplaced = max(plan.largestReplaced, s.size)
-            var entry = s
-            entry.reason = "contenu différent"
-            plan.copies.append(entry)
+            plan.copies.append(s)
             plan.bytesToCopy += s.size
             mismatchFolders.insert(parentKey(s.rel) ?? "")
             if widened.insert(suspect.folder).inserted {

@@ -1,5 +1,11 @@
 # Changements
 
+## 1.9 — 2026-10-12
+### Ajouté
+- Bouton **Afficher** dans la liste de la source : choisir ce qu'elle montre (identiques, différents, absents, ignorés), réglage mémorisé.
+### Retiré
+- La fenêtre « Différences » de la 1.7, remplacée par les pastilles et le filtre.
+
 ## 1.8 — 2026-10-12
 ### Ajouté
 - Pastille d'état devant chaque ligne de la liste de la source : verte si l'élément est identique sur la destination (même taille, même date), orange s'il est différent, rouge s'il en est absent. Un dossier est vert s'il existe, rouge s'il manque, orange quand la dernière analyse y a trouvé des différences ; après une synchronisation réussie, tout repasse au vert. Calculée dossier par dossier, en une lecture de la destination, et seulement si celle-ci est déjà accessible.

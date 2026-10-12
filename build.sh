@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-1.8}"
+VERSION="${VERSION:-1.9}"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 ARCHS=(--arch arm64 --arch x86_64)   # binaire universel : Apple Silicon et Intel
 

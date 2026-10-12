@@ -94,10 +94,6 @@ struct PreviewContext {
     var destination: String
     var resolvedDestination: String
     var mirrorIgnored = false
-    /// Simple consultation des différences : rien ne peut être lancé depuis cette fenêtre.
-    var readOnly = false
-    /// Éléments auxquels l'analyse a été limitée (différences d'une sélection) ; vide = toute la tâche.
-    var scope: [String] = []
 }
 
 /// Ce qu'un élément de la source a comme pendant sur la destination.
@@ -122,6 +118,44 @@ enum DestinationStatus {
         case .same: return "identique sur la destination"
         case .different: return "différent sur la destination"
         case .missing: return "absent de la destination"
+        }
+    }
+}
+
+/// Filtre d'affichage de la liste de la source : quels états montrer.
+struct ListFilter: Equatable {
+    var same = true
+    var different = true
+    var missing = true
+    var ignored = true
+
+    var isDefault: Bool { self == ListFilter() }
+
+    private static let key = "filtreListe"
+
+    static func load() -> ListFilter {
+        guard let hidden = UserDefaults.standard.array(forKey: key) as? [String] else { return ListFilter() }
+        return ListFilter(same: !hidden.contains("identiques"), different: !hidden.contains("differents"),
+                          missing: !hidden.contains("absents"), ignored: !hidden.contains("ignores"))
+    }
+
+    func save() {
+        var hidden: [String] = []
+        if !same { hidden.append("identiques") }
+        if !different { hidden.append("differents") }
+        if !missing { hidden.append("absents") }
+        if !ignored { hidden.append("ignores") }
+        UserDefaults.standard.set(hidden, forKey: Self.key)
+    }
+
+    /// Un élément ignoré suit « Ignorés » ; les autres suivent leur pastille ; sans pastille, toujours affiché.
+    func shows(ignored isIgnored: Bool, status: DestinationStatus?) -> Bool {
+        if isIgnored { return ignored }
+        switch status {
+        case .same?: return same
+        case .different?: return different
+        case .missing?: return missing
+        case nil: return true
         }
     }
 }
@@ -233,6 +267,10 @@ final class AppModel: ObservableObject {
     @Published var destinationStatus: [String: DestinationStatus] = [:]
     /// Dossiers où la dernière analyse a trouvé une différence (et leurs parents) : pastille orange.
     @Published var knownDifferences: Set<String> = []
+    /// Ce que la liste de la source affiche (réglage d'affichage, commun à toutes les tâches, mémorisé).
+    @Published var listFilter = ListFilter.load() {
+        didSet { listFilter.save() }
+    }
     @Published var treeCollapsed = UserDefaults.standard.bool(forKey: "treeCollapsed") {
         didSet { UserDefaults.standard.set(treeCollapsed, forKey: "treeCollapsed") }
     }
@@ -354,34 +392,9 @@ final class AppModel: ObservableObject {
         case "etat":
             destinationStatus = ["2024": .same, "2025": .same, "2026": .different, "Exports": .missing,
                                  "Lightroom Catalog": .different, "Photos Archives": .same, "Lisez-moi.txt": .same]
-        case "differences-selection":
+        case "apercu":
             let day = Date()
-            demo.unchanged = 1_204
-            demo.copies = (0..<14).map { i in
-                var e = Entry(rel: "Exports/2026 Islande/DSCF\(4_410 + i).jpg", isDir: false, size: 8_400_000, mtime: day)
-                e.reason = i % 5 == 0 ? "date différente" : "absent de la destination"
-                return e
-            } + (0..<3).map { i in
-                var e = Entry(rel: "2024/Gaspésie/DSCF\(1_207 + i).RAF", isDir: false, size: size, mtime: day)
-                e.reason = i == 1 ? "contenu différent" : "taille différente"
-                return e
-            }
-            demo.bytesToCopy = demo.copies.reduce(0) { $0 + $1.size }
-            demo.deletes = [DeleteItem(rel: "Exports/Brouillons", isDir: true, files: 5, bytes: 48_000_000)]
-            demo.filesToDelete = 5
-            demo.bytesToDelete = 48_000_000
-            plan = demo
-            context = PreviewContext(taskName: presets.first?.name ?? "", source: presets.first?.source ?? "",
-                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos",
-                                     readOnly: true, scope: ["2024", "Exports", "Photos Archives"])
-            phase = .preview
-        case "apercu", "differences":
-            let day = Date()
-            demo.copies = (0..<copied).map { i in
-                var e = Entry(rel: "2026/Islande/DSCF\(3_344 + i).RAF", isDir: false, size: size, mtime: day)
-                e.reason = i % 9 == 0 ? "date différente" : i % 13 == 0 ? "taille différente" : i % 31 == 0 ? "contenu différent" : "absent de la destination"
-                return e
-            }
+            demo.copies = (0..<copied).map { Entry(rel: "2026/Islande/DSCF\(3_344 + $0).RAF", isDir: false, size: size, mtime: day) }
             demo.bytesToCopy = Int64(copied) * size
             demo.deletes = [
                 DeleteItem(rel: "2025/Rejets", isDir: true, files: 31, bytes: 1_740_000_000),
@@ -394,8 +407,7 @@ final class AppModel: ObservableObject {
             demo.keptDirs = ["Archives"]
             plan = demo
             context = PreviewContext(taskName: presets.first?.name ?? "", source: presets.first?.source ?? "",
-                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos",
-                                     readOnly: state == "differences")
+                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos")
             phase = .preview
         case "fini":
             p.phase = .finished
@@ -539,8 +551,7 @@ final class AppModel: ObservableObject {
 
     /// Étape 1 : analyse la source et la destination, puis présente l'aperçu. Rien n'est modifié.
     /// `verifyAll` : comparer aussi le contenu de tous les fichiers qui paraissent inchangés (lent).
-    /// `readOnly` : afficher les différences sans proposer de synchroniser ; `scope` : seulement ces éléments.
-    func analyze(_ preset: Preset, verifyAll: Bool = false, readOnly: Bool = false, scope: [String] = []) {
+    func analyze(_ preset: Preset, verifyAll: Bool = false) {
         guard !isBusy, !isDirty(preset.id) else { return }
         activePreset = preset.id
         phase = .scanning
@@ -588,14 +599,14 @@ final class AppModel: ObservableObject {
                 }
 
                 let excludes = Set(preset.excludes.map(Scanner.excludeKey))
-                let srcScan = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: preset.ignoreHidden, only: scope) {
+                let srcScan = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: preset.ignoreHidden) {
                     status("Analyse de la source — \($0.formatted()) éléments")
                 }
                 var dstScan = ScanResult()
                 if dstExists {
                     // Mode image : la destination est lue sans exclusion, ce qui y est ignoré n'y a pas sa place.
                     dstScan = try Scanner.scan(root: dst, excludes: preset.mirrorIgnored ? [] : excludes,
-                                               ignoreHidden: preset.ignoreHidden, flagHides: false, only: scope) {
+                                               ignoreHidden: preset.ignoreHidden, flagHides: false) {
                         status("Analyse de la destination — \($0.formatted()) éléments")
                     }
                 }
@@ -620,8 +631,7 @@ final class AppModel: ObservableObject {
                     plan.volumeWarning = "La destination ne se trouve plus sur le même volume qu'à la dernière synchronisation. Vérifiez que le bon disque ou le bon partage est connecté."
                 }
                 let context = PreviewContext(taskName: preset.name, source: src.path, destination: preset.destination,
-                                             resolvedDestination: dst.path, mirrorIgnored: preset.mirrorIgnored,
-                                             readOnly: readOnly, scope: scope)
+                                             resolvedDestination: dst.path, mirrorIgnored: preset.mirrorIgnored)
                 try Task.checkCancellation()
                 let ready = plan
 
@@ -642,7 +652,7 @@ final class AppModel: ObservableObject {
                         self.plan = ready
                         self.context = context
                         self.phase = .preview
-                        if scope.isEmpty { self.knownDifferences = Self.foldersWithDifferences(in: ready) }
+                        self.knownDifferences = Self.foldersWithDifferences(in: ready)
                         self.treeToken += 1
                     }
                     // L'analyse d'un NAS peut durer : on prévient si l'utilisateur est passé à autre chose.
@@ -685,8 +695,7 @@ final class AppModel: ObservableObject {
     /// Étape 2 : exécute le plan approuvé dans l'aperçu.
     /// `acknowledged` : la case de confirmation d'une situation inhabituelle a été cochée.
     func confirm(acknowledged: Bool) {
-        guard isPreview, context?.readOnly != true,
-              let plan, let roots, let preset = presets.first(where: { $0.id == activePreset }),
+        guard isPreview, let plan, let roots, let preset = presets.first(where: { $0.id == activePreset }),
               !plan.isEmpty, plan.blockedReason == nil, plan.risks.isEmpty || acknowledged else { return }
         let analysisStart = analysisStart
         guard Date().timeIntervalSince(analysisStart) < Self.previewLifetime else {
