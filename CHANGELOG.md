@@ -1,5 +1,12 @@
 # Changements
 
+## 1.7 — 2026-10-12
+### Ajouté
+- **Différences** : « Afficher les différences… » (flèche du bouton Synchroniser) et « Afficher les différences de la sélection » (clic droit dans la liste de la source) ouvrent la même analyse que l'aperçu, en lecture seule : nouveaux ou modifiés avec la raison, seulement sur la destination, inchangés, et « Enregistrer la liste… » en fichier texte. Limitée à une sélection, l'analyse ne lit que ces éléments.
+- **Ignorer par lot** dans la liste de la source : sélection par clic, ⌘-clic et ⇧-clic ; clic droit pour ignorer ou synchroniser la sélection, tout le contenu d'un dossier ou tout sauf la sélection ; bouton « Par lot » avec « Tout ignorer » et « Ne plus rien ignorer ».
+### Modifié
+- Pendant la consultation des différences, la liste des tâches indique « Différences affichées ».
+
 ## 1.6 — 2026-10-11
 ### Ajouté
 - Sélecteur **Copie / Image** par tâche, sous la ligne Destination : en mode Copie (le comportement habituel), un élément ignoré déjà présent sur la destination y reste ; en mode Image, il en est effacé, dossier compris. L'aperçu le rappelle. En ligne de commande : `--image`.

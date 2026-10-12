@@ -94,6 +94,10 @@ struct PreviewContext {
     var destination: String
     var resolvedDestination: String
     var mirrorIgnored = false
+    /// Simple consultation des différences : rien ne peut être lancé depuis cette fenêtre.
+    var readOnly = false
+    /// Éléments auxquels l'analyse a été limitée (différences d'une sélection) ; vide = toute la tâche.
+    var scope: [String] = []
 }
 
 /// État affiché après une analyse ou une synchronisation terminée.
@@ -123,7 +127,9 @@ final class AppModel: ObservableObject {
     @Published var presets: [Preset] { didSet { save() } }
     /// Modifications en attente : une tâche n'est réécrite qu'après « Enregistrer ».
     @Published var drafts: [UUID: Preset] = [:]
-    @Published var selection: UUID?
+    @Published var selection: UUID? {
+        didSet { if selection != oldValue { treeSelection = [] } }
+    }
     @Published var phase: Phase = .idle
     @Published var activePreset: UUID?
     @Published var scanStatus = ""
@@ -137,6 +143,12 @@ final class AppModel: ObservableObject {
     @Published var storeAlert: String?
     /// Simple information à montrer une fois (import, export).
     @Published var notice: String?
+    /// Éléments de la liste de la source sélectionnés (chemins relatifs), pour les actions par lot.
+    @Published var treeSelection: Set<String> = []
+    /// Dernière ligne cliquée dans la liste de la source, point de départ d'un ⇧-clic.
+    var treeAnchor: String?
+    /// Maquette seulement : dessine un menu contextuel ouvert dans la liste de la source.
+    @Published var demoMenu = false
     @Published var treeCollapsed = UserDefaults.standard.bool(forKey: "treeCollapsed") {
         didSet { UserDefaults.standard.set(treeCollapsed, forKey: "treeCollapsed") }
     }
@@ -252,9 +264,37 @@ final class AppModel: ObservableObject {
         demo.sourceFiles = 48_912 + copied
 
         switch state {
-        case "apercu":
+        case "lot":
+            treeSelection = ["2024", "Exports", "Photos Archives"]
+            demoMenu = true
+        case "differences-selection":
             let day = Date()
-            demo.copies = (0..<copied).map { Entry(rel: "2026/Islande/DSCF\(3_344 + $0).RAF", isDir: false, size: size, mtime: day) }
+            demo.unchanged = 1_204
+            demo.copies = (0..<14).map { i in
+                var e = Entry(rel: "Exports/2026 Islande/DSCF\(4_410 + i).jpg", isDir: false, size: 8_400_000, mtime: day)
+                e.reason = i % 5 == 0 ? "date différente" : "absent de la destination"
+                return e
+            } + (0..<3).map { i in
+                var e = Entry(rel: "2024/Gaspésie/DSCF\(1_207 + i).RAF", isDir: false, size: size, mtime: day)
+                e.reason = i == 1 ? "contenu différent" : "taille différente"
+                return e
+            }
+            demo.bytesToCopy = demo.copies.reduce(0) { $0 + $1.size }
+            demo.deletes = [DeleteItem(rel: "Exports/Brouillons", isDir: true, files: 5, bytes: 48_000_000)]
+            demo.filesToDelete = 5
+            demo.bytesToDelete = 48_000_000
+            plan = demo
+            context = PreviewContext(taskName: presets.first?.name ?? "", source: presets.first?.source ?? "",
+                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos",
+                                     readOnly: true, scope: ["2024", "Exports", "Photos Archives"])
+            phase = .preview
+        case "apercu", "differences":
+            let day = Date()
+            demo.copies = (0..<copied).map { i in
+                var e = Entry(rel: "2026/Islande/DSCF\(3_344 + i).RAF", isDir: false, size: size, mtime: day)
+                e.reason = i % 9 == 0 ? "date différente" : i % 13 == 0 ? "taille différente" : i % 31 == 0 ? "contenu différent" : "absent de la destination"
+                return e
+            }
             demo.bytesToCopy = Int64(copied) * size
             demo.deletes = [
                 DeleteItem(rel: "2025/Rejets", isDir: true, files: 31, bytes: 1_740_000_000),
@@ -267,7 +307,8 @@ final class AppModel: ObservableObject {
             demo.keptDirs = ["Archives"]
             plan = demo
             context = PreviewContext(taskName: presets.first?.name ?? "", source: presets.first?.source ?? "",
-                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos")
+                                     destination: "smb://nas.local/Sauvegarde/Photos", resolvedDestination: "/Volumes/Sauvegarde/Photos",
+                                     readOnly: state == "differences")
             phase = .preview
         case "fini":
             p.phase = .finished
@@ -411,7 +452,8 @@ final class AppModel: ObservableObject {
 
     /// Étape 1 : analyse la source et la destination, puis présente l'aperçu. Rien n'est modifié.
     /// `verifyAll` : comparer aussi le contenu de tous les fichiers qui paraissent inchangés (lent).
-    func analyze(_ preset: Preset, verifyAll: Bool = false) {
+    /// `readOnly` : afficher les différences sans proposer de synchroniser ; `scope` : seulement ces éléments.
+    func analyze(_ preset: Preset, verifyAll: Bool = false, readOnly: Bool = false, scope: [String] = []) {
         guard !isBusy, !isDirty(preset.id) else { return }
         activePreset = preset.id
         phase = .scanning
@@ -459,14 +501,14 @@ final class AppModel: ObservableObject {
                 }
 
                 let excludes = Set(preset.excludes.map(Scanner.excludeKey))
-                let srcScan = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: preset.ignoreHidden) {
+                let srcScan = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: preset.ignoreHidden, only: scope) {
                     status("Analyse de la source — \($0.formatted()) éléments")
                 }
                 var dstScan = ScanResult()
                 if dstExists {
                     // Mode image : la destination est lue sans exclusion, ce qui y est ignoré n'y a pas sa place.
                     dstScan = try Scanner.scan(root: dst, excludes: preset.mirrorIgnored ? [] : excludes,
-                                               ignoreHidden: preset.ignoreHidden, flagHides: false) {
+                                               ignoreHidden: preset.ignoreHidden, flagHides: false, only: scope) {
                         status("Analyse de la destination — \($0.formatted()) éléments")
                     }
                 }
@@ -491,7 +533,8 @@ final class AppModel: ObservableObject {
                     plan.volumeWarning = "La destination ne se trouve plus sur le même volume qu'à la dernière synchronisation. Vérifiez que le bon disque ou le bon partage est connecté."
                 }
                 let context = PreviewContext(taskName: preset.name, source: src.path, destination: preset.destination,
-                                             resolvedDestination: dst.path, mirrorIgnored: preset.mirrorIgnored)
+                                             resolvedDestination: dst.path, mirrorIgnored: preset.mirrorIgnored,
+                                             readOnly: readOnly, scope: scope)
                 try Task.checkCancellation()
                 let ready = plan
 
@@ -553,7 +596,8 @@ final class AppModel: ObservableObject {
     /// Étape 2 : exécute le plan approuvé dans l'aperçu.
     /// `acknowledged` : la case de confirmation d'une situation inhabituelle a été cochée.
     func confirm(acknowledged: Bool) {
-        guard isPreview, let plan, let roots, let preset = presets.first(where: { $0.id == activePreset }),
+        guard isPreview, context?.readOnly != true,
+              let plan, let roots, let preset = presets.first(where: { $0.id == activePreset }),
               !plan.isEmpty, plan.blockedReason == nil, plan.risks.isEmpty || acknowledged else { return }
         let analysisStart = analysisStart
         guard Date().timeIntervalSince(analysisStart) < Self.previewLifetime else {

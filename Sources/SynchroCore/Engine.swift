@@ -8,6 +8,8 @@ public struct Entry: Sendable, Equatable {
     /// Date du dernier changement du fichier lui-même (contenu, nom, attributs), quand le volume la fournit.
     /// Contrairement à la date de modification, un programme ne peut pas la remettre à une valeur passée.
     public let changed: Date?
+    /// Pour un fichier à copier : pourquoi (« absent de la destination », « taille différente »…).
+    public var reason: String?
 
     public init(rel: String, isDir: Bool, size: Int64, mtime: Date, changed: Date? = nil) {
         self.rel = rel
@@ -317,14 +319,59 @@ public enum Scanner {
     ///   - excludes: chemins relatifs passés par `excludeKey`.
     ///   - flagHides: écarter aussi ce qui porte l'attribut « masqué ». À réserver à la source : sur la destination,
     ///     cet attribut a pu être posé par le NAS ou un autre ordinateur, et ne doit pas rendre la sauvegarde invisible.
+    ///   - only: chemins relatifs auxquels limiter l'analyse (différences d'une sélection) ; vide = tout.
+    ///     Un élément absent est simplement passé, ce qui est normal sur la destination.
     public static func scan(root: URL, excludes: Set<String>, ignoreHidden: Bool, flagHides: Bool = true,
-                            tick: (Int) -> Void) throws -> ScanResult {
+                            only: [String] = [], tick: (Int) -> Void) throws -> ScanResult {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey, .contentModificationDateKey,
                                       .attributeModificationDateKey, .isHiddenKey]
         let keySet = Set(keys)
         var out = ScanResult()
-        var stack: [(url: URL, rel: String)] = [(root, "")]
+        var stack: [(url: URL, rel: String)] = []
+
+        func visit(_ item: URL, in parent: String) throws {
+            let name = item.lastPathComponent
+            if name.hasPrefix(tempPrefix) { out.temps.append(item); return }
+            let rel = parent.isEmpty ? name : parent + "/" + name
+            if name.hasSuffix(".lrcat.lock") { out.openCatalogs.append(String(rel.dropLast(5))) }
+            if isSystemName(name) { return }
+            let k = key(rel)
+            let lowered = k.lowercased()
+            if excludes.contains(lowered) { out.excludedSeen.insert(k); return }
+            let v = try item.resourceValues(forKeys: keySet)
+            let dotted = name.hasPrefix(".")
+            if ignoreHidden && (dotted || (flagHides && v.isHidden == true)) {
+                // Un nom à point est écarté des deux côtés ; un attribut « masqué » n'existe que d'un côté.
+                if !dotted { out.shielded.insert(k) }
+                // On n'y descend pas : s'il abrite un élément ignoré par l'utilisateur, il doit être protégé comme lui.
+                let below = lowered + "/"
+                if excludes.contains(where: { $0.hasPrefix(below) }) { out.excludedSeen.insert(k) }
+                return
+            }
+            let isDir = v.isDirectory == true
+            guard isDir || v.isRegularFile == true else {
+                // Lien symbolique, tube nommé, périphérique… : rien de cela ne se copie comme un fichier.
+                out.links += 1
+                out.shielded.insert(k)
+                return
+            }
+            if ignoreHidden && !dotted && v.isHidden == true { out.hiddenFlagged.insert(k) }
+            out.entries[k] = Entry(rel: rel, isDir: isDir, size: Int64(v.fileSize ?? 0),
+                                   mtime: v.contentModificationDate ?? .distantPast,
+                                   changed: v.attributeModificationDate)
+            if isDir { stack.append((item, rel)) }
+        }
+
+        if only.isEmpty {
+            stack = [(root, "")]
+        } else {
+            for rel in only {
+                let url = root.appendingPathComponent(rel)
+                guard fm.fileExists(atPath: url.path) else { continue }
+                try visit(url, in: (rel as NSString).deletingLastPathComponent)
+            }
+        }
         while let top = stack.popLast() {
             try Task.checkCancellation()
             let items: [URL]
@@ -335,38 +382,7 @@ public enum Scanner {
                 let shown = top.rel.isEmpty ? top.url.path : top.rel
                 throw SyncError("Impossible de lire le dossier « \(shown) » : \(error.localizedDescription)")
             }
-            for item in items {
-                let name = item.lastPathComponent
-                if name.hasPrefix(tempPrefix) { out.temps.append(item); continue }
-                let rel = top.rel.isEmpty ? name : top.rel + "/" + name
-                if name.hasSuffix(".lrcat.lock") { out.openCatalogs.append(String(rel.dropLast(5))) }
-                if isSystemName(name) { continue }
-                let k = key(rel)
-                let lowered = k.lowercased()
-                if excludes.contains(lowered) { out.excludedSeen.insert(k); continue }
-                let v = try item.resourceValues(forKeys: keySet)
-                let dotted = name.hasPrefix(".")
-                if ignoreHidden && (dotted || (flagHides && v.isHidden == true)) {
-                    // Un nom à point est écarté des deux côtés ; un attribut « masqué » n'existe que d'un côté.
-                    if !dotted { out.shielded.insert(k) }
-                    // On n'y descend pas : s'il abrite un élément ignoré par l'utilisateur, il doit être protégé comme lui.
-                    let below = lowered + "/"
-                    if excludes.contains(where: { $0.hasPrefix(below) }) { out.excludedSeen.insert(k) }
-                    continue
-                }
-                let isDir = v.isDirectory == true
-                guard isDir || v.isRegularFile == true else {
-                    // Lien symbolique, tube nommé, périphérique… : rien de cela ne se copie comme un fichier.
-                    out.links += 1
-                    out.shielded.insert(k)
-                    continue
-                }
-                if ignoreHidden && !dotted && v.isHidden == true { out.hiddenFlagged.insert(k) }
-                out.entries[k] = Entry(rel: rel, isDir: isDir, size: Int64(v.fileSize ?? 0),
-                                       mtime: v.contentModificationDate ?? .distantPast,
-                                       changed: v.attributeModificationDate)
-                if isDir { stack.append((item, rel)) }
-            }
+            for item in items { try visit(item, in: top.rel) }
             tick(out.entries.count)
         }
         return out
@@ -470,7 +486,10 @@ public enum Scanner {
                 p.unchanged += 1
                 unchanged.append((k, s, d))
             } else {
-                p.copies.append(s)
+                var entry = s
+                entry.reason = d == nil || d?.isDir == true ? "absent de la destination"
+                    : d?.size != s.size ? "taille différente" : "date différente"
+                p.copies.append(entry)
                 p.bytesToCopy += s.size
                 if let d, !d.isDir {
                     p.replaced += 1
@@ -639,7 +658,9 @@ public enum Scanner {
             plan.replaced += 1
             plan.bytesReplaced += s.size
             plan.largestReplaced = max(plan.largestReplaced, s.size)
-            plan.copies.append(s)
+            var entry = s
+            entry.reason = "contenu différent"
+            plan.copies.append(entry)
             plan.bytesToCopy += s.size
             mismatchFolders.insert(parentKey(s.rel) ?? "")
             if widened.insert(suspect.folder).inserted {

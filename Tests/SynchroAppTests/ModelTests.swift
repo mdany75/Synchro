@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Synchro
 @testable import SynchroCore
@@ -289,11 +290,8 @@ struct ModelTests {
         let store = try #require(AppModel.storeOverride)
         #expect(try bench.fm.contentsOfDirectory(atPath: store.path).contains { $0.hasPrefix("presets.illisible") })
     }
-}
 
 @MainActor
-@Suite(.serialized)
-struct ImportExportTests {
     @Test func exporterPuisImporter() throws {
         let bench = try Bench()
         bench.model.presets[0].excludes = ["Rejets"]
@@ -339,6 +337,53 @@ struct ImportExportTests {
         #expect(bench2.outcome?.result?.succeeded == true)
         #expect(!bench2.fm.fileExists(atPath: bench2.dst.appendingPathComponent("Rejets").path))
         #expect(bench2.read("Rejets/r.txt", in: bench2.src) != nil)
+    }
+
+    /// Les différences se consultent sans rien pouvoir lancer, pour toute la tâche ou pour une sélection.
+    @Test func differencesEnConsultation() async throws {
+        let bench = try Bench()
+        try bench.write("2024/a.raf", in: bench.src, "nouveau")
+        try bench.write("2025/b.raf", in: bench.src, "nouveau")
+        try bench.write("vieux.txt", in: bench.dst)
+
+        bench.model.analyze(bench.task, readOnly: true)
+        try await bench.settle()
+        #expect(bench.model.isPreview && bench.model.context?.readOnly == true && bench.model.context?.scope == [])
+        #expect(bench.model.plan?.copies.count == 2 && bench.model.plan?.deletes.count == 1)
+        try await bench.confirm(acknowledged: true)
+        #expect(bench.model.isPreview)   // rien ne s'est lancé
+        #expect(bench.read("2024/a.raf", in: bench.dst) == nil && bench.read("vieux.txt", in: bench.dst) != nil)
+        bench.model.cancelPreview()
+
+        bench.model.analyze(bench.task, readOnly: true, scope: ["2024"])
+        try await bench.settle()
+        #expect(bench.model.context?.scope == ["2024"])
+        #expect(bench.model.plan?.copies.map(\.rel) == ["2024/a.raf"] && bench.model.plan?.deletes.isEmpty == true)
+        bench.model.cancelPreview()
+    }
+
+    /// Actions par lot sur les éléments ignorés.
+    @Test func ignorerParLot() throws {
+        let bench = try Bench()
+        for name in ["2024", "2025", "Exports", "Rejets"] { try bench.write("\(name)/f.raf", in: bench.src) }
+        try bench.write("Lisez-moi.txt", in: bench.src)
+        var preset = bench.task
+        let binding = Binding(get: { preset }, set: { preset = $0 })
+
+        Batch.ignore(["2024", "Rejets", "2024"], in: binding)
+        #expect(preset.excludes == ["2024", "Rejets"])
+        Batch.allow(["2024"], in: binding)
+        #expect(preset.excludes == ["Rejets"])
+
+        Batch.ignoreAll(in: bench.src, rel: "", except: ["Exports", "Lisez-moi.txt"], preset: binding)
+        #expect(Set(preset.excludes) == ["2024", "2025", "Rejets"])
+
+        Batch.ignore(["Exports/f.raf"], in: binding)
+        Batch.allowAll(under: "Exports", preset: binding)
+        #expect(Set(preset.excludes) == ["2024", "2025", "Rejets"])
+        preset.excludes = []
+        Batch.ignoreAll(in: bench.src, rel: "", except: [], preset: binding)
+        #expect(Set(preset.excludes) == ["2024", "2025", "Exports", "Rejets", "Lisez-moi.txt"])
     }
 }
 

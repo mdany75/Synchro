@@ -162,7 +162,7 @@ struct TaskRow: View {
         if model.isActive(preset.id) {
             switch model.phase {
             case .scanning: return "Analyse en cours…"
-            case .preview: return "Confirmation requise"
+            case .preview: return model.context?.readOnly == true ? "Différences affichées" : "Confirmation requise"
             default: return "Synchronisation en cours…"
             }
         }
@@ -196,6 +196,8 @@ struct PresetDetail: View {
                         .disabled(model.stopping || model.isPreview)
                 } else {
                     Menu {
+                        Button("Afficher les différences…") { model.analyze(preset, readOnly: true) }
+                        Divider()
                         Button("Synchroniser en comparant tout le contenu (lent)…") { model.analyze(preset, verifyAll: true) }
                     } label: {
                         Label("Synchroniser…", systemImage: "arrow.triangle.2.circlepath")
@@ -262,6 +264,31 @@ struct PresetDetail: View {
                     .accessibilityLabel(model.treeCollapsed ? "Afficher le contenu de la source" : "Replier le contenu de la source")
                     IgnoredList(preset: $preset)
                     Spacer()
+                    Menu {
+                        let n = model.treeSelection.count
+                        Button("Ignorer la sélection (\(n))") { Batch.ignore(Array(model.treeSelection), in: $preset) }
+                            .disabled(n == 0)
+                        Button("Synchroniser la sélection (\(n))") { Batch.allow(Array(model.treeSelection), in: $preset) }
+                            .disabled(n == 0)
+                        Button("Ignorer tout sauf la sélection") {
+                            Batch.ignoreAll(in: URL(fileURLWithPath: preset.sourcePath), rel: "", except: model.treeSelection, preset: $preset)
+                        }
+                        .disabled(n == 0)
+                        Button("Afficher les différences de la sélection (\(n))") {
+                            model.analyze(preset, readOnly: true, scope: model.treeSelection.sorted())
+                        }
+                        .disabled(n == 0 || model.isBusy || dirty || preset.destination.isEmpty)
+                        Divider()
+                        Button("Tout ignorer (premier niveau)") {
+                            Batch.ignoreAll(in: URL(fileURLWithPath: preset.sourcePath), rel: "", except: [], preset: $preset)
+                        }
+                        Button("Ne plus rien ignorer") { preset.excludes = [] }.disabled(preset.excludes.isEmpty)
+                    } label: {
+                        Label("Par lot", systemImage: "checklist")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Sélectionnez des lignes avec ⌘ (ou ⇧ pour une plage), puis ignorez ou synchronisez d'un coup. Clic droit sur une ligne : mêmes actions.")
                     Button { model.treeToken += 1 } label: {
                         Label("Actualiser la liste", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
                     }
@@ -661,10 +688,12 @@ struct PreviewSheet: View {
 
     private static let shown = 2000
     private var canRun: Bool { plan.blockedReason == nil && (plan.risks.isEmpty || acknowledged) }
+    /// Consultation des différences : mêmes listes, sans rien à lancer.
+    private var readOnly: Bool { context?.readOnly == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Aperçu — \(context?.taskName ?? "synchronisation")").font(.title2.weight(.semibold))
+            Text("\(readOnly ? "Différences" : "Aperçu") — \(context?.taskName ?? "synchronisation")").font(.title2.weight(.semibold))
 
             if let context {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
@@ -679,26 +708,34 @@ struct PreviewSheet: View {
                              : "\(context.resolvedDestination)  (\(context.destination))")
                             .lineLimit(1).truncationMode(.middle)
                     }
+                    if !context.scope.isEmpty {
+                        GridRow {
+                            Text("Limité à").foregroundStyle(.secondary)
+                            Text(context.scope.joined(separator: ", ")).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
                 }
                 .font(.callout)
             }
 
             HStack(spacing: 8) {
-                StatTile(label: "À copier", value: "\(plan.copies.count.formatted()) · \(Fmt.bytes(plan.bytesToCopy))")
-                StatTile(label: "À effacer de la destination",
+                StatTile(label: readOnly ? "Nouveaux ou modifiés" : "À copier",
+                         value: "\(plan.copies.count.formatted()) · \(Fmt.bytes(plan.bytesToCopy))")
+                StatTile(label: readOnly ? "Seulement sur la destination" : "À effacer de la destination",
                          value: "\(plan.filesToDelete.formatted()) · \(Fmt.bytes(plan.bytesToDelete))",
-                         tint: plan.filesToDelete > 0 ? .red : nil)
+                         tint: plan.filesToDelete > 0 && !readOnly ? .red : nil)
                 StatTile(label: "Inchangés", value: plan.unchanged.formatted())
             }
 
             if plan.isEmpty {
-                Label(plan.conflicts.isEmpty ? "Tout est déjà à jour." : "Rien à copier ni à effacer.",
+                Label(readOnly ? "Aucune différence : la destination est l'image de la source."
+                      : plan.conflicts.isEmpty ? "Tout est déjà à jour." : "Rien à copier ni à effacer.",
                       systemImage: plan.conflicts.isEmpty ? "checkmark.circle.fill" : "info.circle")
                     .foregroundStyle(plan.conflicts.isEmpty ? Color.green : Color.secondary)
             } else {
                 Picker("Liste affichée", selection: $tab) {
-                    Text("À effacer (\(plan.deletes.count.formatted()))").tag(0)
-                    Text("À copier (\(plan.copies.count.formatted()))").tag(1)
+                    Text("\(readOnly ? "Seulement sur la destination" : "À effacer") (\(plan.deletes.count.formatted()))").tag(0)
+                    Text("\(readOnly ? "Nouveaux ou modifiés" : "À copier") (\(plan.copies.count.formatted()))").tag(1)
                 }
                 .pickerStyle(.segmented).labelsHidden()
 
@@ -707,13 +744,14 @@ struct PreviewSheet: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         if tab == 0 {
                             ForEach(plan.deletes.prefix(Self.shown)) { item in
-                                row(item.rel, item.isDir ? "folder" : "doc", .red,
+                                row(item.rel, item.isDir ? "folder" : "doc", readOnly ? .primary : .red,
                                     item.isDir ? "\(Fmt.count(item.files, "fichier", "fichiers")) · \(Fmt.bytes(item.bytes))" : Fmt.bytes(item.bytes))
                             }
                             more(plan.deletes.count)
                         } else {
                             ForEach(plan.copies.prefix(Self.shown), id: \.rel) { entry in
-                                row(entry.rel, "doc", .primary, Fmt.bytes(entry.size))
+                                row(entry.rel, "doc", .primary,
+                                    readOnly ? [entry.reason, Fmt.bytes(entry.size)].compactMap { $0 }.joined(separator: " · ") : Fmt.bytes(entry.size))
                             }
                             more(plan.copies.count)
                         }
@@ -731,9 +769,16 @@ struct PreviewSheet: View {
 
             HStack {
                 Spacer()
-                Button(plan.isEmpty ? "Fermer" : "Annuler", role: .cancel) { model.cancelPreview() }
-                    .keyboardShortcut(.cancelAction)
-                if !plan.isEmpty {
+                if readOnly {
+                    Button("Enregistrer la liste…") { TaskFiles.exportDifferences(plan: plan, context: context) }
+                        .disabled(plan.isEmpty)
+                    Button("Fermer") { model.cancelPreview() }
+                        .keyboardShortcut(.defaultAction)
+                } else {
+                    Button(plan.isEmpty ? "Fermer" : "Annuler", role: .cancel) { model.cancelPreview() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                if !plan.isEmpty && !readOnly {
                     // Jamais le bouton par défaut quand il y a des suppressions : la touche Retour ne doit rien effacer.
                     if plan.deletes.isEmpty {
                         Button(runTitle) { model.confirm(acknowledged: acknowledged) }
@@ -751,7 +796,7 @@ struct PreviewSheet: View {
         }
         .padding(20)
         .frame(width: 700, height: 620)
-        .onAppear { tab = plan.deletes.isEmpty ? 1 : 0 }
+        .onAppear { tab = readOnly || plan.deletes.isEmpty ? 1 : 0 }
     }
 
     private var runTitle: String {
@@ -821,7 +866,9 @@ struct PreviewSheet: View {
             if plan.skippedLinks > 0 {
                 note(Fmt.count(plan.skippedLinks, "lien symbolique n'est pas copié.", "liens symboliques ne sont pas copiés."), "link", .secondary)
             }
-            if let blocked = plan.blockedReason {
+            if readOnly {
+                EmptyView()
+            } else if let blocked = plan.blockedReason {
                 note(blocked, "hand.raised.fill", .red)
             } else if !plan.risks.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -905,6 +952,7 @@ enum Icons {
 }
 
 struct SourceTree: View {
+    @EnvironmentObject var model: AppModel
     @Binding var preset: Preset
 
     var body: some View {
@@ -921,6 +969,7 @@ struct SourceTree: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .overlay(alignment: .topLeading) { if model.demoMenu { DemoMenu().offset(x: 180, y: 100) } }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -957,8 +1006,9 @@ struct TreeChildren: View {
                 message("Accès refusé par macOS. Autorisez Synchro dans Réglages Système → Confidentialité et sécurité → Fichiers et dossiers.")
             case .items(let all):
                 if all.isEmpty && depth == 0 { message("Ce dossier est vide.") }
+                let siblings = all.map(\.rel)
                 ForEach(all) { item in
-                    TreeRow(item: item, depth: depth, inherited: inherited, preset: $preset)
+                    TreeRow(item: item, depth: depth, inherited: inherited, siblings: siblings, preset: $preset)
                 }
             }
         }
@@ -972,37 +1022,107 @@ struct TreeChildren: View {
 
     private func load() async {
         let dir = dir, rel = rel, ignoreHidden = preset.ignoreHidden
-        let result: TreeListing = await Task.detached {
-            let fm = FileManager.default
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return .missing }
-            let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey]
-            guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) else {
-                return .denied
-            }
-            let items = urls.compactMap { url -> TreeItem? in
-                let v = try? url.resourceValues(forKeys: Set(keys))
-                let name = url.lastPathComponent
-                if Scanner.isIgnoredName(name, hidden: v?.isHidden == true, ignoreHidden: ignoreHidden) { return nil }
-                return TreeItem(url: url, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true)
-            }
-            // Les dossiers d'abord : ce sont eux qu'on ignore le plus souvent, ils ne doivent pas se perdre après des milliers de photos.
-            .sorted { a, b in
-                a.isDir != b.isDir ? a.isDir : a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
-            return .items(items)
-        }.value
-        listing = result
+        listing = await Task.detached { Self.list(dir: dir, rel: rel, ignoreHidden: ignoreHidden) }.value
+    }
+
+    nonisolated static func list(dir: URL, rel: String, ignoreHidden: Bool) -> TreeListing {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return .missing }
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey]
+        guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) else {
+            return .denied
+        }
+        let items = urls.compactMap { url -> TreeItem? in
+            let v = try? url.resourceValues(forKeys: Set(keys))
+            let name = url.lastPathComponent
+            if Scanner.isIgnoredName(name, hidden: v?.isHidden == true, ignoreHidden: ignoreHidden) { return nil }
+            return TreeItem(url: url, rel: Scanner.key(rel.isEmpty ? name : rel + "/" + name), isDir: v?.isDirectory == true)
+        }
+        // Les dossiers d'abord : ce sont eux qu'on ignore le plus souvent, ils ne doivent pas se perdre après des milliers de photos.
+        .sorted { a, b in
+            a.isDir != b.isDir ? a.isDir : a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+        return .items(items)
+    }
+}
+
+/// Actions par lot sur les éléments ignorés d'une tâche.
+enum Batch {
+    static func ignore(_ rels: [String], in preset: Binding<Preset>) {
+        var known = Set(preset.wrappedValue.excludes.map(Scanner.excludeKey))
+        for rel in rels where known.insert(Scanner.excludeKey(rel)).inserted {
+            preset.wrappedValue.excludes.append(rel)
+        }
+    }
+
+    static func allow(_ rels: [String], in preset: Binding<Preset>) {
+        let keys = Set(rels.map(Scanner.excludeKey))
+        preset.wrappedValue.excludes.removeAll { keys.contains(Scanner.excludeKey($0)) }
+    }
+
+    /// Ignore chaque enfant direct de `dir`, sauf les éléments de `except` et les dossiers qui en contiennent un.
+    static func ignoreAll(in dir: URL, rel: String, except: Set<String>, preset: Binding<Preset>) {
+        guard case .items(let items) = TreeChildren.list(dir: dir, rel: rel, ignoreHidden: preset.wrappedValue.ignoreHidden) else { return }
+        let kept = Set(except.map(Scanner.excludeKey))
+        var toIgnore: [String] = []
+        for item in items {
+            let key = Scanner.excludeKey(item.rel)
+            if kept.contains(key) || kept.contains(where: { $0.hasPrefix(key + "/") }) { continue }
+            toIgnore.append(item.rel)
+        }
+        allow(Array(except), in: preset)
+        ignore(toIgnore, in: preset)
+    }
+
+    /// Lève toute exclusion à l'intérieur de `rel` (et sur lui-même).
+    static func allowAll(under rel: String, preset: Binding<Preset>) {
+        let key = Scanner.excludeKey(rel)
+        preset.wrappedValue.excludes.removeAll { Scanner.excludeKey($0) == key || Scanner.excludeKey($0).hasPrefix(key + "/") }
+    }
+}
+
+/// Maquette : un menu contextuel « ouvert », dessiné pour la capture de documentation.
+struct DemoMenu: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            item("Ignorer la sélection (3)", highlighted: true)
+            item("Synchroniser la sélection (3)")
+            Divider().padding(.vertical, 4)
+            item("Ignorer tout le contenu de « Exports »")
+            item("Synchroniser tout le contenu de « Exports »")
+            item("Ignorer tout sauf la sélection dans « Exports »")
+            Divider().padding(.vertical, 4)
+            item("Afficher les différences de la sélection (3)")
+        }
+        .padding(5)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 6)
+        .fixedSize()
+    }
+
+    private func item(_ text: String, highlighted: Bool = false) -> some View {
+        Text(text)
+            .padding(.horizontal, 10).padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(highlighted ? Color.white : Color.primary)
+            .background(highlighted ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 5))
     }
 }
 
 struct TreeRow: View {
+    @EnvironmentObject var model: AppModel
     let item: TreeItem
     let depth: Int
     let inherited: Bool
+    /// Les éléments du même dossier, dans l'ordre affiché : ⇧-clic sélectionne une plage parmi eux.
+    let siblings: [String]
     @Binding var preset: Preset
     @Local private var expanded = false
     @Local private var hovering = false
+
+    private var selected: Bool { model.treeSelection.contains(item.rel) }
 
     private var key: String { Scanner.excludeKey(item.rel) }
     private var excluded: Bool { preset.excludes.contains { Scanner.excludeKey($0) == key } }
@@ -1071,9 +1191,11 @@ struct TreeRow: View {
             .padding(.leading, CGFloat(depth) * 18 + 8)
             .padding(.trailing, 10)
             .padding(.vertical, 3)
-            .background(hovering ? Color.primary.opacity(0.05) : .clear)
+            .background(selected ? Color.accentColor.opacity(0.18) : hovering ? Color.primary.opacity(0.05) : .clear)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
+            .onTapGesture { select() }
+            .contextMenu { menu }
 
             if expanded {
                 AnyView(TreeChildren(dir: item.url, rel: item.rel, depth: depth + 1, inherited: ignored, preset: $preset))
@@ -1087,5 +1209,44 @@ struct TreeRow: View {
         } else {
             preset.excludes.append(item.rel)
         }
+    }
+
+    /// Clic : sélectionne cette ligne seule ; ⌘-clic : l'ajoute ou la retire ; ⇧-clic : étend jusqu'à elle,
+    /// parmi les éléments du même dossier, depuis la dernière ligne cliquée.
+    private func select() {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.shift), let anchor = model.treeAnchor,
+           let a = siblings.firstIndex(of: anchor), let b = siblings.firstIndex(of: item.rel) {
+            model.treeSelection.formUnion(siblings[min(a, b)...max(a, b)])
+            return
+        }
+        if flags.contains(.command) {
+            if selected { model.treeSelection.remove(item.rel) } else { model.treeSelection.insert(item.rel) }
+        } else {
+            model.treeSelection = selected && model.treeSelection.count == 1 ? [] : [item.rel]
+        }
+        model.treeAnchor = item.rel
+    }
+
+    /// Les actions portent sur la sélection si la ligne en fait partie, sinon sur la ligne seule.
+    @ViewBuilder private var menu: some View {
+        let targets = selected ? Array(model.treeSelection) : [item.rel]
+        let what = selected && model.treeSelection.count > 1 ? "la sélection (\(targets.count))" : "« \(item.name) »"
+        Button("Ignorer \(what)") { Batch.ignore(targets, in: $preset) }
+        Button("Synchroniser \(what)") { Batch.allow(targets, in: $preset) }
+        if item.isDir {
+            Divider()
+            Button("Ignorer tout le contenu de « \(item.name) »") {
+                Batch.ignoreAll(in: item.url, rel: item.rel, except: [], preset: $preset)
+            }
+            Button("Synchroniser tout le contenu de « \(item.name) »") { Batch.allowAll(under: item.rel, preset: $preset) }
+            Button("Ignorer tout sauf la sélection dans « \(item.name) »") {
+                Batch.ignoreAll(in: item.url, rel: item.rel, except: model.treeSelection, preset: $preset)
+            }
+            .disabled(model.treeSelection.isEmpty)
+        }
+        Divider()
+        Button("Afficher les différences de \(what)") { model.analyze(preset, readOnly: true, scope: targets.sorted()) }
+            .disabled(model.isBusy || model.isDirty(preset.id) || preset.destination.isEmpty)
     }
 }
