@@ -16,8 +16,8 @@ Application macOS native (SwiftUI) qui fait un **miroir** d'un dossier ou d'un d
 
 - **Tâches** : chaque tâche garde sa source, sa destination et ses éléments ignorés. Ajoutez-en autant que voulu. Au premier lancement, une tâche d'exemple est proposée : remplacez sa source et sa destination par les vôtres.
 - **Aperçu avant d'agir** : Synchro analyse d'abord, puis liste ce qui sera effacé (par dossier, avec le nombre de fichiers et la taille) et ce qui sera copié. Rien n'est modifié sans confirmation.
-- **Suivi en direct** : étape en cours, fichier en cours (« fichier 1 479 sur 2 381 » et son nom), durée, temps restant, vitesse moyenne depuis le début de la copie, volume transféré, nombre de fichiers copiés, effacés, inchangés et en échec.
-- **Éléments ignorés** : dans l'arborescence de la source, cliquez sur la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est ni copié, ni effacé de la destination, même si son dossier parent disparaît de la source. Un dossier qui reste synchronisé mais contient des éléments ignorés porte une flèche jaune et leur nombre. Le lien « N éléments ignorés » en donne la liste complète.
+- **Suivi en direct** : étape en cours, nom du fichier en cours, durée, temps restant, vitesse moyenne depuis le début de la copie, volume transféré, nombre de fichiers copiés, effacés, inchangés et en échec.
+- **Éléments ignorés** : dans l'arborescence de la source, cliquez sur la flèche → d'un dossier ou d'un fichier pour la changer en ✕. Un élément ignoré n'est jamais copié ; s'il se trouve déjà sur la destination, le sélecteur **Copie / Image** de la tâche décide de son sort : en mode **Copie**, il y reste tel quel, même si son dossier parent disparaît de la source ; en mode **Image**, il en est effacé, dossier compris, pour que la destination soit l'image exacte de ce qui est synchronisé. Un dossier qui reste synchronisé mais contient des éléments ignorés porte une flèche jaune et leur nombre. Le lien « N éléments ignorés » en donne la liste complète.
 - **Fichiers cachés** ignorés (désactivable par tâche). Les fichiers système (`.DS_Store`, `.Spotlight-V100`, `.Trashes`, `._*`…) ne sont jamais copiés.
 - **Destination SMB** : `smb://serveur/partage/dossier`. Le partage est connecté au besoin ; le mot de passe vient du Trousseau macOS et n'est jamais stocké par l'app.
 - **Glisser-déposer** d'un dossier ou d'un alias sur les lignes Source et Destination.
@@ -152,7 +152,7 @@ Le binaire accepte un mode ligne de commande, pour examiner un plan sans interfa
 build/Synchro.app/Contents/MacOS/Synchro --plan <source> <destination> [--exclude <chemin relatif>]…
 ```
 
-Cette commande affiche le plan sans rien écrire. Avec `--run`, le plan est exécuté tout de suite, **sans aperçu ni demande de confirmation** (les suppressions sont définitives) ; `--confirmer` remplace la case à cocher exigée pour une situation inhabituelle, et `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés. Dans ce mode, les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
+Cette commande affiche le plan sans rien écrire. Avec `--run`, le plan est exécuté tout de suite, **sans aperçu ni demande de confirmation** (les suppressions sont définitives) ; `--confirmer` remplace la case à cocher exigée pour une situation inhabituelle, `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés, et `--image` efface de la destination les éléments ignorés qui s'y trouvent. Dans ce mode, les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
 
 ## Organisation
 

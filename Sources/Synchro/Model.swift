@@ -11,6 +11,9 @@ struct Preset: Identifiable, Codable, Hashable {
     var destination: String
     var excludes: [String] = []
     var ignoreHidden = true
+    /// Sort des éléments ignorés déjà présents sur la destination : en mode « copie » (faux) ils y restent ;
+    /// en mode « image » (vrai) ils en sont effacés, dossiers compris.
+    var mirrorIgnored = false
 
     // État de la dernière synchronisation réussie : il ne fait pas partie des réglages modifiables.
     var lastSync: Date?
@@ -47,6 +50,7 @@ struct Preset: Identifiable, Codable, Hashable {
         destination = try c.decodeIfPresent(String.self, forKey: .destination) ?? ""
         excludes = try c.decodeIfPresent([String].self, forKey: .excludes) ?? []
         ignoreHidden = try c.decodeIfPresent(Bool.self, forKey: .ignoreHidden) ?? true
+        mirrorIgnored = try c.decodeIfPresent(Bool.self, forKey: .mirrorIgnored) ?? false
         lastSync = try c.decodeIfPresent(Date.self, forKey: .lastSync)
         syncedDestination = try c.decodeIfPresent(String.self, forKey: .syncedDestination)
         syncedVolume = try c.decodeIfPresent(String.self, forKey: .syncedVolume)
@@ -89,6 +93,7 @@ struct PreviewContext {
     var source: String
     var destination: String
     var resolvedDestination: String
+    var mirrorIgnored = false
 }
 
 /// État affiché après une analyse ou une synchronisation terminée.
@@ -459,7 +464,9 @@ final class AppModel: ObservableObject {
                 }
                 var dstScan = ScanResult()
                 if dstExists {
-                    dstScan = try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: preset.ignoreHidden, flagHides: false) {
+                    // Mode image : la destination est lue sans exclusion, ce qui y est ignoré n'y a pas sa place.
+                    dstScan = try Scanner.scan(root: dst, excludes: preset.mirrorIgnored ? [] : excludes,
+                                               ignoreHidden: preset.ignoreHidden, flagHides: false) {
                         status("Analyse de la destination — \($0.formatted()) éléments")
                     }
                 }
@@ -483,8 +490,8 @@ final class AppModel: ObservableObject {
                    let now = roots.dstVolume?.identity, now != volume {
                     plan.volumeWarning = "La destination ne se trouve plus sur le même volume qu'à la dernière synchronisation. Vérifiez que le bon disque ou le bon partage est connecté."
                 }
-                let context = PreviewContext(taskName: preset.name, source: src.path,
-                                             destination: preset.destination, resolvedDestination: dst.path)
+                let context = PreviewContext(taskName: preset.name, source: src.path, destination: preset.destination,
+                                             resolvedDestination: dst.path, mirrorIgnored: preset.mirrorIgnored)
                 try Task.checkCancellation()
                 let ready = plan
 

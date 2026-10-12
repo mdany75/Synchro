@@ -1095,3 +1095,32 @@ private func mirrorIsExact(_ box: Sandbox) throws -> Bool {
     #expect(result.progress.copyElapsed <= result.progress.elapsed)
     #expect(result.averageSpeed > 0)
 }
+
+/// Mode « image » : la destination est analysée sans exclusion, donc un élément ignoré qui s'y trouve est effacé.
+@Test func modeImageEffaceLesElementsIgnoresDeLaDestination() throws {
+    let box = try Sandbox()
+    try box.write("a/x.txt", in: box.src, mtime: old)
+    try box.write("a/x.txt", in: box.dst, mtime: old)
+    try box.write("Rejets/y.txt", in: box.src)
+    try box.write("Rejets/y.txt", in: box.dst)
+    try box.write("Rejets/z.txt", in: box.dst)
+    try box.write("a/brouillon.txt", in: box.dst)
+    let ex: Set<String> = [Scanner.excludeKey("Rejets"), Scanner.excludeKey("a/brouillon.txt")]
+    let s = try Scanner.scan(root: box.src, excludes: ex, ignoreHidden: true) { _ in }
+
+    // Mode copie : rien de ce qui est ignoré n'est touché.
+    let dCopie = try Scanner.scan(root: box.dst, excludes: ex, ignoreHidden: true, flagHides: false) { _ in }
+    let copie = Scanner.plan(source: s, destination: dCopie, options: PlanOptions())
+    #expect(copie.deletes.isEmpty && copie.copies.isEmpty && copie.unchanged == 1)
+
+    // Mode image : le dossier ignoré et le fichier ignoré sont effacés de la destination.
+    let dImage = try Scanner.scan(root: box.dst, excludes: [], ignoreHidden: true, flagHides: false) { _ in }
+    let image = Scanner.plan(source: s, destination: dImage, options: PlanOptions())
+    #expect(image.copies.isEmpty && image.unchanged == 1)
+    #expect(Set(image.deletes.map(\.rel)) == ["Rejets", "a/brouillon.txt"])
+    #expect(image.deletes.first { $0.rel == "Rejets" }?.files == 2)
+    #expect(image.filesToDelete == 3)
+    box.run(image, acknowledged: true)
+    #expect(!box.exists("Rejets", in: box.dst) && !box.exists("a/brouillon.txt", in: box.dst))
+    #expect(box.exists("a/x.txt", in: box.dst) && box.exists("Rejets/y.txt", in: box.src))
+}

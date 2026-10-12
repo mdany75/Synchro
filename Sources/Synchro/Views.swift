@@ -77,7 +77,7 @@ struct ContentView: View {
             .background(WindowTitleHider())
             .toolbar {
                 ToolbarItem(placement: .navigation) {
-                    Text("Synchro").font(.headline).padding(.leading, PresetDetail.margin - 8)
+                    Text("Synchro").font(.headline).padding(.leading, PresetDetail.margin - 5)
                 }
             }
         }
@@ -213,6 +213,22 @@ struct PresetDetail: View {
             VStack(spacing: 8) {
                 PathRow(label: "Source", text: $preset.source, kind: .source, apply: setSource)
                 PathRow(label: "Destination", text: $preset.destination, kind: .destination, apply: setDestination)
+                HStack(spacing: 10) {
+                    Text("Ignorés").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+                    Picker("Éléments ignorés déjà présents sur la destination", selection: $preset.mirrorIgnored) {
+                        Text("Copie").tag(false)
+                        Text("Image").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Copie : un élément ignoré déjà présent sur la destination y reste. Image : il en est effacé, dossier compris.")
+                    Text(preset.mirrorIgnored
+                         ? "Un élément ignoré est effacé de la destination s'il s'y trouve, dossier compris."
+                         : "Un élément ignoré déjà présent sur la destination y reste tel quel.")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                }
             }
             .disabled(locked)
 
@@ -259,11 +275,14 @@ struct PresetDetail: View {
                         .id(preset.source + "|\(preset.ignoreHidden)")
                     (Text("→ synchronisé · ")
                      + Text("→ jaune : synchronisé, sauf des éléments ignorés à l'intérieur").foregroundColor(TreeRow.partialColor)
-                     + Text(" · ✕ ignoré. Cliquez sur le symbole pour changer. Un élément ignoré n'est ni copié, ni effacé de la destination."))
+                     + Text(" · ✕ ignoré. Cliquez sur le symbole pour changer. Un élément ignoré n'est jamais copié ; ")
+                     + Text(preset.mirrorIgnored
+                            ? "mode Image : s'il se trouve sur la destination, il en est effacé, dossier compris."
+                            : "mode Copie : s'il se trouve sur la destination, il y reste tel quel."))
                         .font(.caption).foregroundStyle(.secondary)
-                        // Deux lignes au plus, servies avant la liste. Surtout pas de fixedSize ici : la hauteur
+                        // Trois lignes au plus, servies avant la liste. Surtout pas de fixedSize ici : la hauteur
                         // minimale de la fenêtre se calculerait sur un texte replié à l'extrême, et tout déborderait.
-                        .lineLimit(2)
+                        .lineLimit(3)
                         .layoutPriority(1)
                 }
             }
@@ -525,10 +544,7 @@ struct StatusView: View {
         case .preparing: return "Préparation…"
         case .deleting: return "Suppression — \(p.deleteItemsDone.formatted()) / \(p.deleteItemsTotal.formatted())"
         case .folders: return "Création des dossiers…"
-        case .copying:
-            return p.filesTotal > 0
-                ? "Copie — fichier \(p.fileIndex.formatted()) sur \(p.filesTotal.formatted())"
-                : "Copie"
+        case .copying: return "Copie"
         case .verifying: return "Vérification des dates…"
         case .finished: return "Finalisation…"
         }
@@ -759,6 +775,10 @@ struct PreviewSheet: View {
             if !plan.destinationExists {
                 note("Le dossier de destination n'existe pas encore : il sera créé.", "folder.badge.plus", .secondary)
             }
+            if context?.mirrorIgnored == true {
+                note("Mode Image : les éléments ignorés qui se trouvent sur la destination sont effacés avec le reste.",
+                     "xmark.bin", .secondary)
+            }
             ForEach(plan.openCatalogs, id: \.self) { catalog in
                 note("Le catalogue Lightroom « \((catalog as NSString).lastPathComponent) » semble ouvert. Quittez Lightroom puis relancez l'analyse pour que sa copie soit fiable.",
                      "exclamationmark.triangle.fill", .orange)
@@ -922,9 +942,6 @@ struct TreeChildren: View {
     @Binding var preset: Preset
 
     @Local private var listing = TreeListing.loading
-    @Local private var limit = TreeChildren.step
-    private static let step = 300
-
     private var indent: CGFloat { CGFloat(depth) * 18 + 34 }
 
     var body: some View {
@@ -940,20 +957,8 @@ struct TreeChildren: View {
                 message("Accès refusé par macOS. Autorisez Synchro dans Réglages Système → Confidentialité et sécurité → Fichiers et dossiers.")
             case .items(let all):
                 if all.isEmpty && depth == 0 { message("Ce dossier est vide.") }
-                // Un élément ignoré reste toujours visible, même au-delà de la limite, pour pouvoir le rétablir.
-                let ignored = Set(preset.excludes.map(Scanner.excludeKey))
-                let visible = all.enumerated()
-                    .filter { $0.offset < limit || ignored.contains(Scanner.excludeKey($0.element.rel)) }
-                    .map(\.element)
-                ForEach(visible) { item in
+                ForEach(all) { item in
                     TreeRow(item: item, depth: depth, inherited: inherited, preset: $preset)
-                }
-                if all.count > visible.count {
-                    Button("Afficher les \(min(Self.step, all.count - visible.count).formatted()) suivants sur \((all.count - visible.count).formatted()) restants") {
-                        limit += Self.step
-                    }
-                    .buttonStyle(.link).font(.caption)
-                    .padding(.leading, indent).padding(.vertical, 4)
                 }
             }
         }

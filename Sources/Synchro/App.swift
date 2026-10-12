@@ -89,6 +89,7 @@ enum About {
 /// `--plan` seul n'écrit rien. `--run` exécute le plan aussitôt, sans aperçu à confirmer, avec les garde-fous
 /// du moteur ; `--confirmer` tient lieu de la case à cocher exigée pour une situation inhabituelle.
 /// `--comparer-tout` compare le contenu de tous les fichiers qui paraissent inchangés.
+/// `--image` efface de la destination les éléments ignorés qui s'y trouvent (mode « image » de l'app).
 /// `--repere-copie` compare aussi ceux qui ont été touchés après l'écriture de leur copie de destination ;
 /// à réserver aux destinations locales : un NAS ne date pas ses copies de façon comparable, et tout y passerait.
 /// Les fichiers cachés sont toujours ignorés et aucun journal n'est écrit.
@@ -115,7 +116,7 @@ enum CLI {
             }
             let s = try Scanner.scan(root: src, excludes: excludes, ignoreHidden: true) { _ in }
             let d = dstExists
-                ? try Scanner.scan(root: dst, excludes: excludes, ignoreHidden: true, flagHides: false) { _ in }
+                ? try Scanner.scan(root: dst, excludes: args.contains("--image") ? [] : excludes, ignoreHidden: true, flagHides: false) { _ in }
                 : ScanResult()
             var options = PlanOptions(reference: args.contains("--repere-copie") ? .destinationCopy : .none,
                                       verifyAll: args.contains("--comparer-tout"))

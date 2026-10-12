@@ -1,5 +1,13 @@
 # Changements
 
+## 1.6 — 2026-10-11
+### Ajouté
+- Sélecteur **Copie / Image** par tâche, sous la ligne Destination : en mode Copie (le comportement habituel), un élément ignoré déjà présent sur la destination y reste ; en mode Image, il en est effacé, dossier compris. L'aperçu le rappelle. En ligne de commande : `--image`.
+### Modifié
+- La liste de la source affiche tous les éléments d'un dossier d'un coup, sans bouton « Afficher les 300 suivants ».
+- L'étape de copie n'affiche plus « fichier N sur M » ; le nom du fichier en cours reste visible.
+- Titre « Synchro » de la barre d'outils réaligné au pixel sur le contenu.
+
 ## 1.5 — 2026-10-11
 ### Ajouté
 - Mise à jour proposée : au lancement, au plus une fois par jour, Synchro vérifie sur GitHub si une version plus récente est publiée et propose de l'installer en un clic (téléchargement, contrôle de la signature Developer ID, remplacement de l'app dans son dossier, relance). Menu Synchro → « Rechercher une mise à jour… » pour vérifier tout de suite.

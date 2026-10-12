@@ -316,6 +316,30 @@ struct ImportExportTests {
         try Data("pas du JSON".utf8).write(to: file)
         #expect(throws: SyncError.self) { try bench.model.importPresets(from: file) }
     }
+
+    /// Le mode Image se lit dans le fichier des tâches, et une tâche d'avant cette option est en mode Copie.
+    @Test func modeImageDeLaTache() async throws {
+        let bench = try Bench(presetsJSON: """
+        [{"name": "Ancienne", "source": "/a", "destination": "/b"},
+         {"name": "Image", "source": "/a", "destination": "/b", "mirrorIgnored": true}]
+        """)
+        #expect(bench.model.presets.map(\.mirrorIgnored) == [false, true])
+
+        let bench2 = try Bench()
+        try bench2.write("garde.txt", in: bench2.src, mtime: old)
+        try bench2.write("garde.txt", in: bench2.dst, mtime: old)
+        try bench2.write("Rejets/r.txt", in: bench2.src)
+        try bench2.write("Rejets/r.txt", in: bench2.dst)
+        bench2.model.presets[0].excludes = ["Rejets"]
+        bench2.model.presets[0].mirrorIgnored = true
+        try await bench2.analyze()
+        #expect(bench2.model.context?.mirrorIgnored == true)
+        #expect(bench2.model.plan?.deletes.map(\.rel) == ["Rejets"])
+        try await bench2.confirm(acknowledged: true)
+        #expect(bench2.outcome?.result?.succeeded == true)
+        #expect(!bench2.fm.fileExists(atPath: bench2.dst.appendingPathComponent("Rejets").path))
+        #expect(bench2.read("Rejets/r.txt", in: bench2.src) != nil)
+    }
 }
 
 // MARK: - Mise à jour
