@@ -1094,6 +1094,7 @@ private func mirrorIsExact(_ box: Sandbox) throws -> Bool {
     #expect(result.progress.copyElapsed > 0)
     #expect(result.progress.copyElapsed <= result.progress.elapsed)
     #expect(result.averageSpeed > 0)
+    #expect(result.progress.instantSpeed >= 0 && result.progress.instantSpeed.isFinite)
 }
 
 /// Mode « image » : la destination est analysée sans exclusion, donc un élément ignoré qui s'y trouve est effacé.

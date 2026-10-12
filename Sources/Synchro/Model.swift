@@ -379,6 +379,7 @@ final class AppModel: ObservableObject {
         p.deleteItemsDone = 3
         p.current = "2026/Islande/DSCF4821.RAF"
         p.speed = 108_000_000
+        p.instantSpeed = 131_000_000
         p.elapsed = 767
         p.copyElapsed = 760
         var demo = SyncPlan()

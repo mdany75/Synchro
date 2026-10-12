@@ -1,5 +1,9 @@
 # Changements
 
+## 1.10 — 2026-10-12
+### Ajouté
+- Pendant la copie, un clic sur la tuile « Vitesse moyenne » affiche la vitesse instantanée (cinq dernières secondes), et inversement ; le choix est mémorisé. Le temps restant reste calculé sur la moyenne.
+
 ## 1.9 — 2026-10-12
 ### Ajouté
 - Bouton **Afficher** dans la liste de la source : choisir ce qu'elle montre (identiques, différents, absents, ignorés), réglage mémorisé.

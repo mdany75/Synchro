@@ -529,6 +529,8 @@ struct StatTile: View {
 
 struct StatusView: View {
     @EnvironmentObject var model: AppModel
+    /// Tuile de vitesse : moyenne depuis le début, ou débit instantané ; un clic bascule, le choix est mémorisé.
+    @Local private var instantSpeed = UserDefaults.standard.bool(forKey: "vitesseInstantanee")
 
     var body: some View {
         switch model.phase {
@@ -570,7 +572,16 @@ struct StatusView: View {
                 }
                 if p.bytesTotal > 0 {
                     StatTile(label: "Restant", value: p.phase == .copying ? Fmt.duration(p.remaining) : "—")
-                    StatTile(label: "Vitesse moyenne", value: Fmt.speed(p.speed))
+                    Button {
+                        instantSpeed.toggle()
+                        UserDefaults.standard.set(instantSpeed, forKey: "vitesseInstantanee")
+                    } label: {
+                        StatTile(label: instantSpeed ? "Vitesse instantanée ⇄" : "Vitesse moyenne ⇄",
+                                 value: Fmt.speed(instantSpeed ? p.instantSpeed : p.speed))
+                    }
+                    .buttonStyle(.plain)
+                    .help(instantSpeed ? "Débit des cinq dernières secondes. Cliquer pour la moyenne depuis le début de la copie."
+                                       : "Moyenne depuis le début de la copie. Cliquer pour le débit instantané.")
                     StatTile(label: "Transféré", value: "\(Fmt.bytes(p.bytesDone)) / \(Fmt.bytes(p.bytesTotal))")
                 }
             }

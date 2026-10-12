@@ -186,6 +186,8 @@ public struct SyncProgress: Sendable {
     public var filesTotal = 0
     /// Vitesse moyenne depuis le début de la copie : stable, donc un temps restant qui ne saute pas.
     public var speed: Double = 0
+    /// Débit des dernières secondes, pour qui veut voir le pic du moment.
+    public var instantSpeed: Double = 0
     public var elapsed: TimeInterval = 0
     /// Temps passé dans la phase de copie (les suppressions ne comptent pas dans la vitesse).
     public var copyElapsed: TimeInterval = 0
@@ -708,6 +710,7 @@ public enum SyncRunner {
         var copiedFiles: [String] = []
         var stamped: [(rel: String, date: Date)] = []
         var copyStart: Date?
+        var samples: [(t: Date, bytes: Int64)] = []
         var lastReport = Date.distantPast
 
         func report(force: Bool = false) {
@@ -720,6 +723,11 @@ public enum SyncRunner {
                 // à chaque fichier rend le temps restant illisible.
                 prog.copyElapsed = now.timeIntervalSince(copyStart)
                 prog.speed = prog.copyElapsed >= 1 ? Double(prog.bytesDone) / prog.copyElapsed : 0
+                // Débit instantané : sur les cinq dernières secondes.
+                samples.append((now, prog.bytesDone))
+                while samples.count > 2, now.timeIntervalSince(samples[0].t) > 5 { samples.removeFirst() }
+                let dt = now.timeIntervalSince(samples[0].t)
+                if dt > 0.3 { prog.instantSpeed = max(0, Double(prog.bytesDone - samples[0].bytes) / dt) }
             }
             onProgress(prog)
         }
